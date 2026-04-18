@@ -4,12 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import { format, parseISO, startOfDay, subDays } from "date-fns";
 import { toast } from "sonner";
-import { Clock } from "lucide-react";
+import { ChevronDown, ChevronUp, Clock } from "lucide-react";
 import type { Profile, SleepLog } from "@/types";
 import { computeSleepDurationHours } from "@/lib/sleep-duration";
 import { dbTimeToDisplay, dbTimeToInput } from "@/lib/sleep-time-format";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,6 +45,7 @@ export function SleepView() {
   const [quality, setQuality] = useState("4");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const logCardRef = useRef<HTMLDivElement>(null);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -286,21 +286,19 @@ export function SleepView() {
         </div>
       )}
 
-      <header className="mb-8">
+      <header className="mb-12">
         <h1 className="font-display text-4xl font-bold tracking-tight text-ink">SLEEP</h1>
-        <p className="mt-2 max-w-md text-sm text-muted">Editable until midnight. We color-code recovery quality.</p>
+        <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
+          Editable until midnight. We color-code recovery quality.
+        </p>
       </header>
 
       <form onSubmit={onSubmit}>
-        <div ref={logCardRef} id="sleep-log" className="scroll-mt-28 md:scroll-mt-24">
-          <Card className="border-line/80 bg-surface/80 p-5 dark:bg-elevated/60">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">Wake day</p>
-          <p className="mt-1 font-display text-lg font-semibold text-ink">{format(parseISO(`${date}T12:00:00`), "EEEE, MMMM d")}</p>
-
-          <div className="mt-6 grid grid-cols-2 gap-3">
-            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-4 dark:bg-canvas/30">
+        <div ref={logCardRef} id="sleep-log" className="scroll-mt-28 space-y-10 md:scroll-mt-24">
+          <div className="grid grid-cols-2 gap-4">
+            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-5 dark:bg-canvas/30">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Bedtime</span>
-              <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="mt-3 flex items-center justify-between gap-2">
                 <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(bedtime)}</span>
                 <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
               </div>
@@ -312,9 +310,9 @@ export function SleepView() {
                 aria-label="Bedtime"
               />
             </label>
-            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-4 dark:bg-canvas/30">
+            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-5 dark:bg-canvas/30">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Wake time</span>
-              <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="mt-3 flex items-center justify-between gap-2">
                 <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(wakeTime)}</span>
                 <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
               </div>
@@ -328,49 +326,68 @@ export function SleepView() {
             </label>
           </div>
 
-          <div className="mt-6 rounded-2xl border border-line/60 bg-elevated/40 px-4 py-4 text-center dark:bg-black/20">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Total</p>
-            <p className={cn("mt-1 font-display text-3xl font-bold uppercase", totalTone)}>
+          <div className="px-1 py-2 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">Total</p>
+            <p className={cn("mt-3 font-display text-3xl font-bold uppercase tracking-tight md:text-4xl", totalTone)}>
               {previewHours != null ? `${previewHours} hours` : "—"}
             </p>
           </div>
 
-          <details className="mt-6 rounded-2xl border border-line/60 bg-canvas/30 p-4 dark:bg-canvas/20">
-            <summary className="cursor-pointer text-sm font-semibold text-ink">Quality &amp; notes</summary>
-            <div className="mt-4 grid gap-4">
-              <div>
-                <Label htmlFor="s-q">Quality (1–5)</Label>
-                <Select id="s-q" className="mt-1.5 min-h-[44px]" value={quality} onChange={(e) => setQuality(e.target.value)}>
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <option key={n} value={String(n)}>
-                      {n} — {["Poor", "Fair", "OK", "Good", "Excellent"][n - 1]}
-                    </option>
-                  ))}
-                </Select>
+          <div className="border-t border-line/30">
+            <button
+              type="button"
+              className="flex w-full min-h-[48px] items-center justify-between gap-3 py-4 text-left transition hover:opacity-80"
+              onClick={() => setQualityOpen((o) => !o)}
+              aria-expanded={qualityOpen}
+            >
+              <span className="text-sm font-medium text-ink">Quality &amp; notes</span>
+              {qualityOpen ? (
+                <ChevronUp className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} aria-hidden />
+              ) : (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} aria-hidden />
+              )}
+            </button>
+            {qualityOpen && (
+              <div className="grid gap-6 pb-2 pt-1">
+                <div>
+                  <Label htmlFor="s-q">Quality (1–5)</Label>
+                  <Select id="s-q" className="mt-2 min-h-[44px]" value={quality} onChange={(e) => setQuality(e.target.value)}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={String(n)}>
+                        {n} — {["Poor", "Fair", "OK", "Good", "Excellent"][n - 1]}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="s-notes">Notes</Label>
+                  <Textarea
+                    id="s-notes"
+                    className="mt-2 min-h-[88px]"
+                    placeholder="Dreams, disruptions, caffeine…"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
               </div>
-              <div>
-                <Label htmlFor="s-notes">Notes</Label>
-                <Textarea
-                  id="s-notes"
-                  className="mt-1.5 min-h-[88px]"
-                  placeholder="Dreams, disruptions, caffeine…"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                />
-              </div>
-            </div>
-          </details>
+            )}
+          </div>
 
-          <Button type="submit" className="mt-6 min-h-[48px] w-full" disabled={saving}>
+          <Button
+            type="submit"
+            className="mt-6 min-h-[48px] w-full rounded-xl bg-gold text-zinc-950 shadow-none ring-0 hover:brightness-[1.03] hover:shadow-none active:scale-100 dark:text-white"
+            disabled={saving}
+          >
             {saving ? "Saving…" : "Save sleep"}
           </Button>
-          </Card>
         </div>
       </form>
 
-      <section className="mt-10">
+      <div className="my-14 border-0 border-t border-line/25" aria-hidden />
+
+      <section className="mt-0">
         <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted">Last 7 nights</h2>
-        <div className="mt-4 flex gap-2">
+        <div className="mt-6 flex gap-3">
           {last7Days.map((d) => {
             const ds = format(d, "yyyy-MM-dd");
             const log = logForDate(ds);
@@ -402,9 +419,9 @@ export function SleepView() {
         </div>
       </section>
 
-      <section className="mt-10">
+      <section className="mt-16">
         <h2 className="font-display text-lg font-semibold text-ink">History</h2>
-        <ul className="mt-4 divide-y divide-line/80 rounded-2xl border border-line/80">
+        <ul className="mt-6 divide-y divide-line/60">
           {rows.length === 0 && <li className="px-4 py-10 text-center text-sm text-muted">No sleep logs yet.</li>}
           {rows.map((r) => (
             <li key={r.id} className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
