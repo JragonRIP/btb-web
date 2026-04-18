@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 function LoginFormInner() {
-  const supabase = useSupabaseBrowser();
+  const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/dashboard";
@@ -50,6 +50,15 @@ function LoginFormInner() {
     if (magicError) toast.error(magicError.message);
     else toast.success("Check your email for the magic link.");
     setBusy(false);
+  }
+
+  if (supabaseInitError) {
+    return (
+      <Card className="w-full max-w-md border-red-500/40 bg-red-500/5 p-6 text-sm shadow-gold">
+        <p className="font-medium text-red-700 dark:text-red-300">Supabase configuration</p>
+        <p className="mt-2 text-muted">{supabaseInitError}</p>
+      </Card>
+    );
   }
 
   if (!supabase) {

@@ -29,8 +29,14 @@ Authentication uses Supabase with cookie-based sessions via [`@supabase/ssr`](ht
 
    Required keys:
 
-   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_URL` (must be `https://…`, no trailing slash required)
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+   **Production builds:** `NEXT_PUBLIC_*` values are embedded when you run `npm run build`, so CI and Vercel must define these variables before the build step (same as local `.env.local`).
+
+   **Smoke test (optional):** with `.env.local` in place, run `node scripts/verify-supabase-auth.mjs` to confirm your machine can reach Supabase Auth.
+
+   **If the browser shows `Load failed` on sign-up:** you were likely hitting the wrong API host (e.g. stale build without env vars, or placeholder URL). Fix env vars, restart `npm run dev`, or run a fresh `npm run build` after setting them. The app trims whitespace and optional quotes around values.
 
 3. **Database schema**
 

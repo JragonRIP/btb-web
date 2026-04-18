@@ -38,6 +38,10 @@ yarn-error.log*
 .env.production.local
 !.env.local.example
 
+# next-pwa (generated each production build)
+/public/sw.js
+/public/workbox-*.js
+
 # vercel
 .vercel
 

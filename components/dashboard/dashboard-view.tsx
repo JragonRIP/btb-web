@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function DashboardView() {
-  const supabase = useSupabaseBrowser();
+  const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
   const [loading, setLoading] = useState(true);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
@@ -87,6 +87,17 @@ export function DashboardView() {
     }
     return items.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 12);
   }, [workouts, measurements, sleep]);
+
+  if (supabaseInitError) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-10">
+        <Card className="border-red-500/40 bg-red-500/5 p-4 text-sm text-ink">
+          <p className="font-medium text-red-700 dark:text-red-300">Supabase configuration</p>
+          <p className="mt-2 text-muted">{supabaseInitError}</p>
+        </Card>
+      </div>
+    );
+  }
 
   if (!supabase) {
     return (

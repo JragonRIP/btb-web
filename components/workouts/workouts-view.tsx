@@ -25,7 +25,7 @@ const TYPES: { value: WorkoutType; label: string }[] = [
 ];
 
 export function WorkoutsView() {
-  const supabase = useSupabaseBrowser();
+  const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<Workout[]>([]);
   const [filter, setFilter] = useState<WorkoutType | "all">("all");
@@ -98,6 +98,20 @@ export function WorkoutsView() {
       toast.success("Deleted");
       await load();
     }
+  }
+
+  if (supabaseInitError) {
+    return (
+      <div>
+        <PageHeader title="Workouts" subtitle="Log sessions, filter history, and watch weekly volume." />
+        <div className="mx-auto max-w-3xl px-4 py-6">
+          <Card className="border-red-500/40 bg-red-500/5 p-4 text-sm text-ink">
+            <p className="font-medium text-red-700 dark:text-red-300">Supabase configuration</p>
+            <p className="mt-2 text-muted">{supabaseInitError}</p>
+          </Card>
+        </div>
+      </div>
+    );
   }
 
   if (!supabase) {
