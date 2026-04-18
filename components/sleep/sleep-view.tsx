@@ -299,7 +299,7 @@ export function SleepView() {
             <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-5 dark:bg-canvas/30">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Bedtime</span>
               <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(bedtime)}</span>
+                <span className="font-sans text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(bedtime)}</span>
                 <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
               </div>
               <input
@@ -313,7 +313,7 @@ export function SleepView() {
             <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-5 dark:bg-canvas/30">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Wake time</span>
               <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(wakeTime)}</span>
+                <span className="font-sans text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(wakeTime)}</span>
                 <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
               </div>
               <input
@@ -328,7 +328,7 @@ export function SleepView() {
 
           <div className="px-1 py-2 text-center">
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">Total</p>
-            <p className={cn("mt-3 font-display text-3xl font-bold uppercase tracking-tight md:text-4xl", totalTone)}>
+            <p className={cn("mt-3 font-sans text-3xl font-bold uppercase tracking-tight md:text-4xl", totalTone)}>
               {previewHours != null ? `${previewHours} hours` : "—"}
             </p>
           </div>
