@@ -1,19 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
+import { readProfileCache } from "@/lib/btb-local-cache";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
  * Redirects to /onboarding until profiles.onboarding_completed is true.
  * Only wraps authenticated main app routes (not /onboarding itself).
+ * Onboarding status is fetched once per session (plus sync from localStorage cache),
+ * not on every pathname change, so tab switches stay instant.
  */
 export function ProfileGate({ children }: { children: React.ReactNode }) {
   const { client: supabase, error: envError } = useSupabaseBrowser();
   const pathname = usePathname();
   const router = useRouter();
   const [ready, setReady] = useState(false);
+  const onboardingDoneRef = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") onboardingDoneRef.current = null;
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase]);
 
   useEffect(() => {
     if (envError) {
@@ -33,21 +47,27 @@ export function ProfileGate({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const { data: profile, error } = await supabase
-        .from("profiles")
-        .select("onboarding_completed")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error(error);
-        setReady(true);
-        return;
+      const fromCache = readProfileCache(user.id);
+      if (fromCache?.v && typeof fromCache.v.onboarding_completed === "boolean") {
+        onboardingDoneRef.current = fromCache.v.onboarding_completed;
       }
 
-      const completed = profile?.onboarding_completed === true;
+      if (onboardingDoneRef.current === null) {
+        const { data: profile, error } = await supabase
+          .from("profiles")
+          .select("onboarding_completed")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          console.error(error);
+          onboardingDoneRef.current = false;
+        } else {
+          onboardingDoneRef.current = profile?.onboarding_completed === true;
+        }
+      }
+
+      const completed = onboardingDoneRef.current === true;
       if (!completed && pathname && !pathname.startsWith("/onboarding")) {
         router.replace("/onboarding");
         return;

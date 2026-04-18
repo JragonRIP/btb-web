@@ -28,7 +28,6 @@ import {
   writeLastSleepCache,
   writeProfileCache,
   writeWeekHomeCache,
-  profileCacheIsFresh,
 } from "@/lib/btb-local-cache";
 
 const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"] as const;
@@ -56,6 +55,18 @@ export function HomeView() {
   const touchRef = useRef<{ x: number } | null>(null);
   const summaryFired = useRef(false);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const isFri = isFriday(new Date());
@@ -77,8 +88,10 @@ export function HomeView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setBlockingSpinner(false);
-      setBootstrapped(true);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setBootstrapped(true);
+      }
       return;
     }
 
@@ -107,20 +120,9 @@ export function HomeView() {
       spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
     }
 
-    const needProfileFetch = !pCached || !profileCacheIsFresh(pCached.ts);
-
     try {
-      if (needProfileFetch) {
-        const { data: p, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-        if (error) throw error;
-        const pRow = (p ?? null) as Profile | null;
-        if (pRow) {
-          setProfile(pRow);
-          writeProfileCache(user.id, pRow);
-        }
-      }
-
-      const [{ data: ft }, { data: sl }, { data: wf }, { data: ww }] = await Promise.all([
+      const [{ data: prof }, { data: ft }, { data: sl }, { data: wf }, { data: ww }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
         supabase.from("food_logs").select("*").eq("user_id", user.id).eq("date", todayStr).order("logged_at", { ascending: false }),
         supabase.from("sleep_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(1),
         supabase
@@ -131,6 +133,14 @@ export function HomeView() {
           .lt("date", wkEnd),
         supabase.from("workout_logs").select("date, completed").eq("user_id", user.id).gte("date", wkStart).lt("date", wkEnd),
       ]);
+
+      if (!aliveRef.current) return;
+
+      const pRow = (prof ?? null) as Profile | null;
+      if (pRow) {
+        setProfile(pRow);
+        writeProfileCache(user.id, pRow);
+      }
 
       const food = (ft ?? []) as FoodLog[];
       const sleepRow = (sl?.[0] ?? null) as SleepLog | null;
@@ -148,22 +158,21 @@ export function HomeView() {
 
       setOffline(false);
     } catch {
-      setOffline(true);
+      if (aliveRef.current) setOffline(true);
     } finally {
       if (spinnerTimerRef.current) {
         clearTimeout(spinnerTimerRef.current);
         spinnerTimerRef.current = null;
       }
-      setBlockingSpinner(false);
-      setBootstrapped(true);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setBootstrapped(true);
+      }
     }
   }, [supabase, todayStr, weekOffset]);
 
   useEffect(() => {
     if (supabase) void refreshRemote();
-    return () => {
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-    };
   }, [refreshRemote, supabase]);
 
   /** Sunday summary gate (once per session) */
@@ -229,7 +238,7 @@ export function HomeView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
-      const { error } = await supabase.from("weight_logs").insert({
+    const { error } = await supabase.from("weight_logs").insert({
       user_id: user.id,
       date: todayStr,
       weight_lbs: w,
@@ -309,7 +318,7 @@ export function HomeView() {
 
   return (
     <div
-      className={cn("relative mx-auto w-full max-w-3xl px-4 pb-28 md:pb-10", safeTop)}
+      className={cn("relative mx-auto w-full max-w-3xl px-4 pb-6 md:pb-8", safeTop)}
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
@@ -355,34 +364,34 @@ export function HomeView() {
         </Card>
       )}
 
-      <div className="mb-8 grid grid-cols-2 gap-4">
-        <Card className="flex flex-col items-center py-6">
+      <div className="mb-10 grid grid-cols-2 gap-6">
+        <div className="flex flex-col items-center py-2">
           <RingProgress
             label="Calories"
             value={goalsReady ? totals.cal : 0}
             max={goalsReady ? calGoal! : 1}
             sublabel={goalsReady ? `${Math.round(totals.cal)} / ${calGoal}` : `${Math.round(totals.cal)} / —`}
           />
-        </Card>
-        <Card className="flex flex-col items-center py-6">
+        </div>
+        <div className="flex flex-col items-center py-2">
           <RingProgress
             label="Protein"
             value={goalsReady ? totals.prot : 0}
             max={goalsReady ? protGoal! : 1}
             sublabel={goalsReady ? `${Math.round(totals.prot)}g / ${protGoal}g` : `${Math.round(totals.prot)}g / —`}
           />
-        </Card>
+        </div>
       </div>
 
-      <Card className="mb-8 p-4">
+      <Card className="mb-10 p-5">
         <div className="grid grid-cols-2 gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">Sleep last night</p>
-            <p className="mt-2 font-display text-xl font-semibold text-ink">
+            <p className="mt-2 font-sans text-2xl font-semibold leading-snug tracking-tight text-ink">
               {lastSleep?.duration_hours != null ? `${lastSleep.duration_hours} h` : "Log sleep"}
             </p>
             {lastSleep?.duration_hours == null && (
-              <Link href="/sleep#log" className="mt-2 inline-block text-sm font-medium text-gold hover:underline">
+              <Link href="/sleep#log" className="mt-3 inline-block text-sm font-medium text-gold hover:underline">
                 Open sleep
               </Link>
             )}
@@ -402,8 +411,8 @@ export function HomeView() {
         <h2 className="font-display text-lg font-semibold text-ink">This week</h2>
         <p className="text-xs text-muted">Swipe for past weeks · {weekOffset === 0 ? "Current" : `${weekOffset} wk ago`}</p>
       </div>
-      <Card className="mb-10 p-4">
-        <div className="flex justify-between gap-1">
+      <Card className="mb-10 p-5">
+        <div className="flex justify-between gap-2">
           {weekDays.map((d, i) => {
             const ds = format(d, "yyyy-MM-dd");
             const isToday = ds === todayStr;
@@ -413,33 +422,39 @@ export function HomeView() {
             const wk = weekWorkouts.find((w) => w.date === ds);
             const cg = goalsReady ? calGoal! : 0;
             const pg = goalsReady ? protGoal! : 0;
-            const hCal = cg > 0 ? Math.min(100, (cals / cg) * 100) : 0;
-            const hProt = pg > 0 ? Math.min(100, (prot / pg) * 100) : 0;
-            const hWk = wk?.completed ? 100 : 0;
+            const calR = cg > 0 ? Math.min(1, cals / cg) : 0;
+            const protR = pg > 0 ? Math.min(1, prot / pg) : 0;
+            const wkR = wk?.completed ? 1 : 0;
+            const combinedPct = goalsReady ? ((calR + protR + wkR) / 3) * 100 : 0;
+            const fillClass =
+              combinedPct >= 99.5
+                ? "bg-gold"
+                : combinedPct > 0
+                  ? "bg-gradient-to-r from-gold/35 via-gold/70 to-gold"
+                  : "";
             return (
               <button
                 key={ds}
                 type="button"
                 className={cn(
-                  "flex min-h-[44px] min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-0.5 py-2 transition",
-                  isToday && "bg-gold/10 ring-1 ring-gold/40"
+                  "flex min-h-[44px] min-w-0 flex-1 flex-col items-stretch gap-2 rounded-lg px-0.5 py-2 transition",
+                  isToday && "bg-gold/5 ring-1 ring-gold/30"
                 )}
                 onClick={() => setSelectedDay(selectedDay === ds ? null : ds)}
               >
-                <span className="text-[10px] font-semibold text-muted">{DAY_LABELS[i]}</span>
-                <div className="flex h-24 w-full max-w-[40px] items-end justify-center gap-0.5">
-                  {[
-                    { h: hCal, c: "bg-gold" },
-                    { h: hProt, c: "bg-gold/70" },
-                    { h: hWk, c: "bg-white/60 dark:bg-white/35" },
-                  ].map((bar, bi) => (
-                    <div key={bi} className="flex h-full w-2 flex-col justify-end rounded-sm bg-line/25">
-                      <div
-                        className={cn("w-full rounded-t-sm transition-all", bar.c)}
-                        style={{ height: `${Math.max(2, (bar.h / 100) * 96)}px` }}
-                      />
-                    </div>
-                  ))}
+                <span
+                  className={cn(
+                    "text-center text-[10px] font-semibold",
+                    isToday ? "text-gold" : "text-muted"
+                  )}
+                >
+                  {DAY_LABELS[i]}
+                </span>
+                <div className="mt-auto h-2 w-full overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
+                  <div
+                    className={cn("h-full rounded-full transition-[width] duration-500 ease-out", fillClass)}
+                    style={{ width: `${Math.min(100, combinedPct)}%` }}
+                  />
                 </div>
               </button>
             );

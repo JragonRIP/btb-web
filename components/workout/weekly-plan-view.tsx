@@ -16,10 +16,17 @@ export function WeeklyPlanView() {
   const { client: supabase, error: envError } = useSupabaseBrowser();
   const [rows, setRows] = useState<WeeklyWorkoutPlanRow[]>([]);
   const [offline, setOffline] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
   const todayDbDow = new Date().getDay();
   const [selectedDow, setSelectedDow] = useState(todayDbDow);
   const pillRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     if (!supabase) return;
@@ -27,7 +34,6 @@ export function WeeklyPlanView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
-    setUserId(user.id);
     const cached = readWeeklyPlanCache(user.id);
     if (cached?.v?.length) {
       setRows(cached.v);
@@ -40,11 +46,13 @@ export function WeeklyPlanView() {
         .eq("user_id", user.id)
         .order("day_of_week", { ascending: true });
       if (error) throw error;
+      if (!aliveRef.current) return;
       const next = (data ?? []) as WeeklyWorkoutPlanRow[];
       setRows(next);
       writeWeeklyPlanCache(user.id, next);
       setOffline(false);
     } catch {
+      if (!aliveRef.current) return;
       if (!cached?.v?.length) setRows([]);
       setOffline(true);
     }
@@ -105,7 +113,7 @@ export function WeeklyPlanView() {
         })}
       </div>
 
-      <div className="mx-auto max-w-3xl px-4 pb-28">
+      <div className="mx-auto max-w-3xl px-4 pb-6">
         {!configured ? (
           <div className="rounded-2xl border border-line bg-surface/60 p-8 text-center dark:bg-elevated/40">
             <p className="font-medium text-ink">No workout set — configure in Settings</p>

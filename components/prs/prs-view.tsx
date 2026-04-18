@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
@@ -31,6 +31,13 @@ export function PrsView() {
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [celebrate, setCelebrate] = useState<string | null>(null);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     if (!supabase) return;
@@ -39,13 +46,14 @@ export function PrsView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
       return;
     }
     const [{ data: p }, { data: w }] = await Promise.all([
       supabase.from("personal_records").select("*").eq("user_id", user.id).order("achieved_at", { ascending: false }),
       supabase.from("weight_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(120),
     ]);
+    if (!aliveRef.current) return;
     setPrs((p ?? []) as PersonalRecord[]);
     setWeights((w ?? []) as WeightLog[]);
     setLoading(false);

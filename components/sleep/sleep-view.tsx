@@ -19,7 +19,6 @@ import {
   readSleepListCache,
   writeProfileCache,
   writeSleepListCache,
-  profileCacheIsFresh,
 } from "@/lib/btb-local-cache";
 
 const DOW_LETTER = ["S", "M", "T", "W", "T", "F", "S"] as const;
@@ -50,6 +49,18 @@ export function SleepView() {
   const logCardRef = useRef<HTMLDivElement>(null);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seededForm = useRef(false);
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const sleepGoalHours = profile?.sleep_goal_hours ?? 9;
@@ -104,7 +115,7 @@ export function SleepView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setBlockingSpinner(false);
+      if (aliveRef.current) setBlockingSpinner(false);
       return;
     }
 
@@ -121,41 +132,37 @@ export function SleepView() {
       spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
     }
 
-    const needProfile = !pCached || !profileCacheIsFresh(pCached.ts);
-
     try {
-      if (needProfile) {
-        const { data: prof, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-        if (error) throw error;
-        if (prof) {
-          const pr = prof as Profile;
-          setProfile(pr);
-          writeProfileCache(user.id, pr);
-        }
-      }
+      const [{ data: prof, error: pe }, { data, error: sleepErr }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+        supabase.from("sleep_logs").select("*").order("date", { ascending: false }).limit(200),
+      ]);
+      if (pe) throw pe;
+      if (sleepErr) throw sleepErr;
+      if (!aliveRef.current) return;
 
-      const { data, error } = await supabase.from("sleep_logs").select("*").order("date", { ascending: false }).limit(200);
-      if (error) throw error;
+      if (prof) {
+        const pr = prof as Profile;
+        setProfile(pr);
+        writeProfileCache(user.id, pr);
+      }
       const list = (data ?? []) as SleepLog[];
       setRows(list);
       writeSleepListCache(user.id, list);
       setOffline(false);
     } catch {
-      setOffline(true);
+      if (aliveRef.current) setOffline(true);
     } finally {
       if (spinnerTimerRef.current) {
         clearTimeout(spinnerTimerRef.current);
         spinnerTimerRef.current = null;
       }
-      setBlockingSpinner(false);
+      if (aliveRef.current) setBlockingSpinner(false);
     }
   }, [supabase]);
 
   useEffect(() => {
     if (supabase) void refreshRemote();
-    return () => {
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-    };
   }, [refreshRemote, supabase]);
 
   useEffect(() => {
@@ -279,7 +286,7 @@ export function SleepView() {
   }
 
   return (
-    <div className="relative mx-auto max-w-3xl px-4 pb-28 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] md:pb-10">
+    <div className="relative mx-auto max-w-3xl px-4 pb-6 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] md:pb-8">
       {offline && (
         <div className="pointer-events-none fixed right-3 top-[calc(max(env(safe-area-inset-top,0px),16px)+10px)] z-50 rounded-full border border-line bg-surface/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted shadow-soft dark:bg-elevated">
           Offline

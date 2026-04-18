@@ -26,6 +26,8 @@ export function DesktopTopNav() {
               <Link
                 key={href}
                 href={href}
+                prefetch
+                scroll={false}
                 className={cn(
                   "inline-flex min-h-[44px] items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition",
                   active
@@ -41,6 +43,8 @@ export function DesktopTopNav() {
         </div>
         <Link
           href="/settings"
+          prefetch
+          scroll={false}
           className={cn(
             "inline-flex h-11 w-11 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-ink shadow-soft transition hover:border-gold/40 hover:shadow-gold dark:bg-elevated dark:shadow-soft-dark",
             pathname.startsWith("/settings") && "border-gold/50 shadow-gold"

@@ -18,7 +18,6 @@ import {
   readProfileCache,
   writeFoodTodayCache,
   writeProfileCache,
-  profileCacheIsFresh,
 } from "@/lib/btb-local-cache";
 
 export function LogView() {
@@ -32,6 +31,18 @@ export function LogView() {
   const [prot, setProt] = useState("");
   const [saving, setSaving] = useState(false);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const today = format(new Date(), "yyyy-MM-dd");
 
@@ -41,7 +52,7 @@ export function LogView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setBlockingSpinner(false);
+      if (aliveRef.current) setBlockingSpinner(false);
       return;
     }
 
@@ -59,46 +70,42 @@ export function LogView() {
       spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
     }
 
-    const needProfile = !pCached || !profileCacheIsFresh(pCached.ts);
-
     try {
-      if (needProfile) {
-        const { data: p, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
-        if (error) throw error;
-        if (p) {
-          const pr = p as Profile;
-          setProfile(pr);
-          writeProfileCache(user.id, pr);
-        }
-      }
-
-      const { data: f, error: fe } = await supabase
-        .from("food_logs")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("date", today)
-        .order("logged_at", { ascending: false });
+      const [{ data: p, error: pe }, { data: f, error: fe }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+        supabase
+          .from("food_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("date", today)
+          .order("logged_at", { ascending: false }),
+      ]);
+      if (pe) throw pe;
       if (fe) throw fe;
+      if (!aliveRef.current) return;
+
+      if (p) {
+        const pr = p as Profile;
+        setProfile(pr);
+        writeProfileCache(user.id, pr);
+      }
       const list = (f ?? []) as FoodLog[];
       setRows(list);
       writeFoodTodayCache(user.id, today, list);
       setOffline(false);
     } catch {
-      setOffline(true);
+      if (aliveRef.current) setOffline(true);
     } finally {
       if (spinnerTimerRef.current) {
         clearTimeout(spinnerTimerRef.current);
         spinnerTimerRef.current = null;
       }
-      setBlockingSpinner(false);
+      if (aliveRef.current) setBlockingSpinner(false);
     }
   }, [supabase, today]);
 
   useEffect(() => {
     if (supabase) void refreshRemote();
-    return () => {
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-    };
   }, [refreshRemote, supabase]);
 
   const totals = useMemo(() => {
@@ -240,12 +247,40 @@ export function LogView() {
       )}
       <PageHeader title="Log" subtitle="Track meals against your daily goals." />
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
-        <Card className="p-4">
-          <p className="text-center text-sm text-muted">Today</p>
-          <p className="mt-1 text-center font-display text-xl font-bold text-gold">
-            {Math.round(totals.c)} / {goalsReady ? calGoal : "—"} kcal · {Math.round(totals.p)}g / {goalsReady ? `${protGoal}g` : "—"} protein
-          </p>
-        </Card>
+        <div className="space-y-5">
+          <div>
+            <div className="mb-2 flex items-baseline justify-between gap-3 text-sm">
+              <span className="font-medium text-ink">Calories</span>
+              <span className="tabular-nums text-muted">
+                {Math.round(totals.c)} / {goalsReady ? calGoal : "—"} kcal
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
+              <div
+                className="h-full rounded-full bg-gold transition-[width] duration-300 ease-out"
+                style={{
+                  width: goalsReady && calGoal ? `${Math.min(100, (totals.c / calGoal) * 100)}%` : "0%",
+                }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 flex items-baseline justify-between gap-3 text-sm">
+              <span className="font-medium text-ink">Protein</span>
+              <span className="tabular-nums text-muted">
+                {Math.round(totals.p)}g / {goalsReady ? `${protGoal}g` : "—"} protein
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
+              <div
+                className="h-full rounded-full bg-gold transition-[width] duration-300 ease-out"
+                style={{
+                  width: goalsReady && protGoal ? `${Math.min(100, (totals.p / protGoal) * 100)}%` : "0%",
+                }}
+              />
+            </div>
+          </div>
+        </div>
 
         <Card id="log" className="scroll-mt-28 space-y-4 p-4 md:scroll-mt-24">
           <h2 className="font-display text-lg font-semibold text-ink">Add entry</h2>
