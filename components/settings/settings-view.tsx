@@ -22,6 +22,7 @@ import {
   buildWeeklySummaryStats,
   type WeeklySummaryStats,
 } from "@/components/summary/weekly-summary-modal";
+import { writeProfileCache } from "@/lib/btb-local-cache";
 
 export function SettingsView() {
   const { client: supabase } = useSupabaseBrowser();
@@ -56,6 +57,7 @@ export function SettingsView() {
     const p = data as Profile | null;
     setProfile(p);
     if (p) {
+      writeProfileCache(user.id, p);
       setName(p.name ?? "");
       setWeight(p.weight_lbs != null ? String(p.weight_lbs) : "");
       setCal(String(p.calorie_goal ?? 2500));

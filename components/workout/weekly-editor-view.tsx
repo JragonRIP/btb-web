@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { writeWeeklyPlanCache } from "@/lib/btb-local-cache";
 
 const DOW_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
@@ -99,6 +100,7 @@ export function WeeklyEditorView({ backHref = "/settings" }: { backHref?: string
         return;
       }
     }
+    writeWeeklyPlanCache(user.id, rows);
     toast.success("Weekly plan saved");
     setSaving(false);
     router.push(backHref);
@@ -144,63 +146,78 @@ export function WeeklyEditorView({ backHref = "/settings" }: { backHref?: string
                   <div className="space-y-3">
                     <Label>Exercises</Label>
                     {(r.exercises as PlanExercise[]).map((ex, idx) => (
-                      <div key={ex.id} className="flex flex-wrap gap-2 rounded-xl border border-line p-3">
-                        <Input
-                          className="min-w-[140px] flex-1"
-                          value={ex.name}
-                          onChange={(e) => {
-                            const next = [...(r.exercises as PlanExercise[])];
-                            next[idx] = { ...ex, name: e.target.value };
-                            updateExercises(r.day_of_week, next);
-                          }}
-                        />
-                        <Input
-                          type="number"
-                          className="w-20"
-                          value={ex.sets}
-                          onChange={(e) => {
-                            const next = [...(r.exercises as PlanExercise[])];
-                            next[idx] = { ...ex, sets: Number(e.target.value) || 0 };
-                            updateExercises(r.day_of_week, next);
-                          }}
-                        />
-                        <Input
-                          type="number"
-                          className="w-20"
-                          value={ex.reps}
-                          onChange={(e) => {
-                            const next = [...(r.exercises as PlanExercise[])];
-                            next[idx] = { ...ex, reps: Number(e.target.value) || 0 };
-                            updateExercises(r.day_of_week, next);
-                          }}
-                        />
-                        <Input
-                          type="number"
-                          className="w-24"
-                          title="Rest seconds"
-                          value={ex.restSeconds}
-                          onChange={(e) => {
-                            const next = [...(r.exercises as PlanExercise[])];
-                            next[idx] = { ...ex, restSeconds: Number(e.target.value) || 60 };
-                            updateExercises(r.day_of_week, next);
-                          }}
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="text-red-600"
-                          onClick={() => {
-                            const next = (r.exercises as PlanExercise[]).filter((_, i) => i !== idx);
-                            updateExercises(r.day_of_week, next.length ? next : [newExercise()]);
-                          }}
-                        >
-                          Remove
-                        </Button>
+                      <div key={ex.id} className="grid gap-3 rounded-xl border border-line p-3 sm:grid-cols-[minmax(0,1fr)_repeat(3,5.5rem)_auto] sm:items-end">
+                        <div className="min-w-0 sm:col-span-1">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Exercise name</p>
+                          <Input
+                            className="min-h-[44px] min-w-0"
+                            placeholder="Bench press"
+                            value={ex.name}
+                            onChange={(e) => {
+                              const next = [...(r.exercises as PlanExercise[])];
+                              next[idx] = { ...ex, name: e.target.value };
+                              updateExercises(r.day_of_week, next);
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Sets</p>
+                          <Input
+                            type="number"
+                            className="min-h-[44px] w-full"
+                            value={ex.sets}
+                            onChange={(e) => {
+                              const next = [...(r.exercises as PlanExercise[])];
+                              next[idx] = { ...ex, sets: Number(e.target.value) || 0 };
+                              updateExercises(r.day_of_week, next);
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Reps</p>
+                          <Input
+                            type="number"
+                            className="min-h-[44px] w-full"
+                            value={ex.reps}
+                            onChange={(e) => {
+                              const next = [...(r.exercises as PlanExercise[])];
+                              next[idx] = { ...ex, reps: Number(e.target.value) || 0 };
+                              updateExercises(r.day_of_week, next);
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Rest (sec)</p>
+                          <Input
+                            type="number"
+                            className="min-h-[44px] w-full"
+                            value={ex.restSeconds}
+                            onChange={(e) => {
+                              const next = [...(r.exercises as PlanExercise[])];
+                              next[idx] = { ...ex, restSeconds: Number(e.target.value) || 60 };
+                              updateExercises(r.day_of_week, next);
+                            }}
+                          />
+                        </div>
+                        <div className="flex items-end sm:justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="min-h-[44px] text-red-600"
+                            onClick={() => {
+                              const next = (r.exercises as PlanExercise[]).filter((_, i) => i !== idx);
+                              updateExercises(r.day_of_week, next.length ? next : [newExercise()]);
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       </div>
                     ))}
                     <Button
                       type="button"
                       variant="secondary"
+                      className="min-h-[44px]"
                       onClick={() => updateExercises(r.day_of_week, [...(r.exercises as PlanExercise[]), newExercise()])}
                     >
                       Add exercise

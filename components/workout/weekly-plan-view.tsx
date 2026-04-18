@@ -2,87 +2,123 @@
 
 import Link from "next/link";
 import { format } from "date-fns";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import type { DayType, WeeklyWorkoutPlanRow } from "@/types";
-import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { MON_FIRST_DB_DOW, dateForDbDayOfWeek } from "@/lib/week-dates";
+import { DayWorkoutPanel } from "@/components/workout/day-workout-panel";
+import { readWeeklyPlanCache, writeWeeklyPlanCache } from "@/lib/btb-local-cache";
 
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
-
-const badge: Record<DayType, string> = {
-  workout: "bg-gold/20 text-ink dark:text-white",
-  active_rest: "bg-white/15 text-ink dark:text-white",
-  full_rest: "bg-line/20 text-muted",
-};
+const PILL_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 export function WeeklyPlanView() {
   const { client: supabase, error: envError } = useSupabaseBrowser();
   const [rows, setRows] = useState<WeeklyWorkoutPlanRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const todayDbDow = new Date().getDay();
+  const [selectedDow, setSelectedDow] = useState(todayDbDow);
+  const pillRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
   const load = useCallback(async () => {
     if (!supabase) return;
-    setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) {
-      setLoading(false);
-      return;
+    if (!user) return;
+    setUserId(user.id);
+    const cached = readWeeklyPlanCache(user.id);
+    if (cached?.v?.length) {
+      setRows(cached.v);
+      setOffline(false);
     }
-    const { data, error } = await supabase
-      .from("weekly_workout_plan")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("day_of_week", { ascending: true });
-    if (error) console.error(error);
-    setRows((data ?? []) as WeeklyWorkoutPlanRow[]);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from("weekly_workout_plan")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("day_of_week", { ascending: true });
+      if (error) throw error;
+      const next = (data ?? []) as WeeklyWorkoutPlanRow[];
+      setRows(next);
+      writeWeeklyPlanCache(user.id, next);
+      setOffline(false);
+    } catch {
+      if (!cached?.v?.length) setRows([]);
+      setOffline(true);
+    }
   }, [supabase]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  useLayoutEffect(() => {
+    const el = pillRefs.current.get(selectedDow);
+    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [selectedDow, rows]);
+
   const byDow = new Map(rows.map((r) => [r.day_of_week, r]));
+  const sessionDate = format(dateForDbDayOfWeek(new Date(), selectedDow), "yyyy-MM-dd");
+  const row = byDow.get(selectedDow);
+  const dayType: DayType = (row?.day_type as DayType) ?? "workout";
+  const exercises = (row?.exercises ?? []) as { id?: string }[];
+  const configured =
+    Boolean(row) && (dayType !== "workout" || (Array.isArray(exercises) && exercises.length > 0));
 
   if (envError) return <p className="p-6 text-sm text-red-600">{envError}</p>;
-  if (!supabase) return <Skeleton className="m-4 h-40" />;
+  if (!supabase) return <p className="p-6 text-muted">Loading…</p>;
 
   return (
-    <div>
-      <header className="border-b border-line/80 bg-canvas/80 px-4 pb-4 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
-        <h1 className="font-display text-2xl font-semibold text-ink md:text-3xl">Weekly plan</h1>
-        <p className="mt-1 text-sm text-muted">Tap a day to train or recover.</p>
+    <div className="relative">
+      {offline && (
+        <div className="pointer-events-none fixed left-3 top-[calc(max(env(safe-area-inset-top,0px),16px)+10px)] z-50 rounded-full border border-line bg-surface/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted shadow-soft dark:bg-elevated">
+          Offline
+        </div>
+      )}
+      <header className="border-b border-line/80 bg-canvas/80 px-4 pb-4 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] backdrop-blur-md">
+        <h1 className="font-display text-2xl font-semibold text-ink md:text-3xl">Workout</h1>
+        <p className="mt-1 text-sm text-muted">Pick a day, then train or recover.</p>
       </header>
-      <div className="mx-auto max-w-3xl space-y-3 px-4 py-6">
-        {loading && <Skeleton className="h-32 w-full" />}
-        {!loading &&
-          MON_FIRST_DB_DOW.map((dow, idx) => {
-            const row = byDow.get(dow);
-            const session = dateForDbDayOfWeek(new Date(), dow);
-            const ds = format(session, "yyyy-MM-dd");
-            return (
-              <Link key={dow} href={`/workout/day/${dow}?date=${ds}`} className="block min-h-[44px]">
-                <Card className="p-4 transition hover:border-gold/40 hover:shadow-gold">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="font-display text-lg font-semibold text-ink">{DAY_NAMES[idx]}</p>
-                      <p className="text-xs text-muted">{format(session, "MMM d")}</p>
-                    </div>
-                    <span className={cn("rounded-full px-3 py-1 text-xs font-semibold capitalize", badge[row?.day_type ?? "workout"])}>
-                      {(row?.day_type ?? "workout").replace("_", " ")}
-                    </span>
-                  </div>
-                  {row?.muscle_group && <p className="mt-2 text-sm text-gold">{row.muscle_group}</p>}
-                  {!row && <p className="mt-2 text-sm text-muted">Not configured — set up in Settings.</p>}
-                </Card>
-              </Link>
-            );
-          })}
+
+      <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 py-4">
+        {MON_FIRST_DB_DOW.map((dow, idx) => {
+          const sel = dow === selectedDow;
+          return (
+            <button
+              key={dow}
+              type="button"
+              ref={(el) => {
+                if (el) pillRefs.current.set(dow, el);
+                else pillRefs.current.delete(dow);
+              }}
+              onClick={() => setSelectedDow(dow)}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-2.5 text-sm font-semibold transition min-h-[44px]",
+                sel ? "bg-gold text-black shadow-gold" : "bg-elevated text-muted ring-1 ring-line/60"
+              )}
+            >
+              {PILL_LABELS[idx]}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mx-auto max-w-3xl px-4 pb-28">
+        {!configured ? (
+          <div className="rounded-2xl border border-line bg-surface/60 p-8 text-center dark:bg-elevated/40">
+            <p className="font-medium text-ink">No workout set — configure in Settings</p>
+            <Link
+              href="/settings/weekly-workouts"
+              className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl bg-gold px-6 text-sm font-medium text-zinc-950 shadow-gold transition hover:brightness-110 dark:text-white"
+            >
+              Edit weekly workouts
+            </Link>
+          </div>
+        ) : (
+          <DayWorkoutPanel dow={selectedDow} dateStr={sessionDate} layout="embedded" />
+        )}
       </div>
     </div>
   );

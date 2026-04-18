@@ -2,8 +2,8 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** Safe area top + 12px so titles clear notch / status bar on phones */
-const safeTop = "pt-[calc(env(safe-area-inset-top,0px)+12px)]";
+/** Safe area (min 16px) + 8px so titles / icons clear notch / status bar */
+const safeTop = "pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]";
 
 export function PageHeader({
   title,

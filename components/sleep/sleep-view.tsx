@@ -1,58 +1,168 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
-import { format } from "date-fns";
+import { format, parseISO, startOfDay, subDays } from "date-fns";
 import { toast } from "sonner";
-import type { SleepLog } from "@/types";
+import { Clock } from "lucide-react";
+import type { Profile, SleepLog } from "@/types";
 import { computeSleepDurationHours } from "@/lib/sleep-duration";
-import { SleepDurationChart } from "@/components/charts/sleep-duration-chart";
-import { PageHeader } from "@/components/shell/page-header";
+import { dbTimeToDisplay, dbTimeToInput } from "@/lib/sleep-time-format";
 import { Button } from "@/components/ui/button";
-import { Card, CardDescription, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+import {
+  BTB_BOOT_SPINNER_MS,
+  readProfileCache,
+  readSleepListCache,
+  writeProfileCache,
+  writeSleepListCache,
+  profileCacheIsFresh,
+} from "@/lib/btb-local-cache";
+
+const DOW_LETTER = ["S", "M", "T", "W", "T", "F", "S"] as const;
+
+function qualityDotClass(q: number | null) {
+  if (q == null) return "bg-line/40";
+  if (q <= 1) return "bg-red-500";
+  if (q === 2) return "bg-orange-500";
+  if (q === 3) return "bg-gold";
+  if (q === 4) return "bg-emerald-500";
+  return "bg-emerald-400";
+}
 
 export function SleepView() {
   const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
-  const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SleepLog[]>([]);
-  const [sleepGoalHours, setSleepGoalHours] = useState(9);
-
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [blockingSpinner, setBlockingSpinner] = useState(true);
+  const [offline, setOffline] = useState(false);
   const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [bedtime, setBedtime] = useState("22:30");
-  const [wakeTime, setWakeTime] = useState("06:30");
+  const [wakeTime, setWakeTime] = useState("07:00");
   const [quality, setQuality] = useState("4");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const logCardRef = useRef<HTMLDivElement>(null);
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seededForm = useRef(false);
 
-  const previewHours = useMemo(
-    () => computeSleepDurationHours(bedtime, wakeTime),
-    [bedtime, wakeTime]
+  const todayStr = format(new Date(), "yyyy-MM-dd");
+  const sleepGoalHours = profile?.sleep_goal_hours ?? 9;
+
+  const previewHours = useMemo(() => computeSleepDurationHours(bedtime, wakeTime), [bedtime, wakeTime]);
+
+  const totalTone = useMemo(() => {
+    if (previewHours == null) return "text-muted";
+    if (previewHours >= sleepGoalHours) return "text-emerald-400";
+    if (previewHours >= sleepGoalHours - 1) return "text-gold";
+    return "text-red-400/90";
+  }, [previewHours, sleepGoalHours]);
+
+  const last7Days = useMemo(() => {
+    const end = startOfDay(new Date());
+    return Array.from({ length: 7 }, (_, i) => subDays(end, 6 - i));
+  }, []);
+
+  const logForDate = useCallback(
+    (ds: string) => {
+      return rows.find((r) => r.date === ds);
+    },
+    [rows]
   );
 
-  const load = useCallback(async () => {
+  const openDay = useCallback(
+    (d: Date) => {
+      const ds = format(d, "yyyy-MM-dd");
+      setDate(ds);
+      const hit = rows.find((r) => r.date === ds);
+      if (hit) {
+        setEditingId(hit.id);
+        setBedtime(dbTimeToInput(hit.bedtime));
+        setWakeTime(dbTimeToInput(hit.wake_time));
+        setQuality(String(hit.quality ?? 4));
+        setNotes(hit.notes ?? "");
+      } else {
+        setEditingId(null);
+        setBedtime("22:30");
+        setWakeTime("07:00");
+        setQuality("4");
+        setNotes("");
+      }
+      requestAnimationFrame(() => logCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    },
+    [rows]
+  );
+
+  const refreshRemote = useCallback(async () => {
     if (!supabase) return;
-    setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) {
-      const { data: prof } = await supabase.from("profiles").select("sleep_goal_hours").eq("id", user.id).maybeSingle();
-      if (prof?.sleep_goal_hours != null) setSleepGoalHours(Number(prof.sleep_goal_hours));
+    if (!user) {
+      setBlockingSpinner(false);
+      return;
     }
-    const { data, error } = await supabase.from("sleep_logs").select("*").order("date", { ascending: false }).limit(200);
-    if (error) toast.error(error.message);
-    setRows((data ?? []) as SleepLog[]);
-    setLoading(false);
+
+    const pCached = readProfileCache(user.id);
+    const sCached = readSleepListCache(user.id);
+    if (pCached?.v) setProfile(pCached.v);
+    if (sCached?.v?.length) setRows(sCached.v);
+
+    const hadCache = Boolean(pCached?.v) || Boolean(sCached?.v?.length);
+    if (hadCache) setBlockingSpinner(false);
+    else {
+      setBlockingSpinner(true);
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
+    }
+
+    const needProfile = !pCached || !profileCacheIsFresh(pCached.ts);
+
+    try {
+      if (needProfile) {
+        const { data: prof, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+        if (error) throw error;
+        if (prof) {
+          const pr = prof as Profile;
+          setProfile(pr);
+          writeProfileCache(user.id, pr);
+        }
+      }
+
+      const { data, error } = await supabase.from("sleep_logs").select("*").order("date", { ascending: false }).limit(200);
+      if (error) throw error;
+      const list = (data ?? []) as SleepLog[];
+      setRows(list);
+      writeSleepListCache(user.id, list);
+      setOffline(false);
+    } catch {
+      setOffline(true);
+    } finally {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+      setBlockingSpinner(false);
+    }
   }, [supabase]);
 
   useEffect(() => {
-    if (supabase) void load();
-  }, [load, supabase]);
+    if (supabase) void refreshRemote();
+    return () => {
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+    };
+  }, [refreshRemote, supabase]);
+
+  useEffect(() => {
+    if (!rows.length || seededForm.current) return;
+    seededForm.current = true;
+    openDay(new Date());
+  }, [rows, openDay]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -73,166 +183,253 @@ export function SleepView() {
       setSaving(false);
       return;
     }
-    const { error } = await supabase.from("sleep_logs").insert({
+    const bed = bedtime.length === 5 ? `${bedtime}:00` : bedtime;
+    const wake = wakeTime.length === 5 ? `${wakeTime}:00` : wakeTime;
+    const payload = {
       user_id: user.id,
       date,
-      bedtime: bedtime.length === 5 ? `${bedtime}:00` : bedtime,
-      wake_time: wakeTime.length === 5 ? `${wakeTime}:00` : wakeTime,
+      bedtime: bed,
+      wake_time: wake,
       duration_hours,
       quality: q,
       notes: notes.trim() === "" ? null : notes.trim(),
-    });
+    };
+
+    const { data: existing } = await supabase.from("sleep_logs").select("id").eq("user_id", user.id).eq("date", date).maybeSingle();
+
+    const targetId = editingId ?? existing?.id ?? null;
+    const { error } = targetId
+      ? await supabase
+          .from("sleep_logs")
+          .update({
+            bedtime: bed,
+            wake_time: wake,
+            duration_hours,
+            quality: q,
+            notes: payload.notes,
+          })
+          .eq("id", targetId)
+      : await supabase.from("sleep_logs").insert(payload);
+
     if (error) toast.error(error.message);
     else {
       toast.success("Sleep saved");
       setNotes("");
-      await load();
+      await refreshRemote();
     }
     setSaving(false);
   }
 
   async function removeRow(id: string) {
     if (!supabase) return;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+    const prev = rows;
+    const deleted = prev.find((x) => x.id === id);
+    const next = prev.filter((x) => x.id !== id);
+    setRows(next);
+    writeSleepListCache(user.id, next);
     const { error } = await supabase.from("sleep_logs").delete().eq("id", id);
-    if (error) toast.error(error.message);
-    else {
+    if (error) {
+      toast.error(error.message);
+      setRows(prev);
+      writeSleepListCache(user.id, prev);
+    } else {
       toast.success("Deleted");
-      await load();
+      await refreshRemote();
+      if (deleted?.date === date) {
+        setDate(todayStr);
+        setEditingId(null);
+        setBedtime("22:30");
+        setWakeTime("07:00");
+        setQuality("4");
+        setNotes("");
+      }
     }
   }
 
   function fmtTime(t: string | null) {
-    if (!t) return "—";
-    const parts = t.split(":");
-    if (parts.length >= 2) return `${parts[0]}:${parts[1]}`;
-    return t;
+    return dbTimeToDisplay(t);
   }
 
   if (supabaseInitError) {
     return (
-      <div>
-        <PageHeader title="Sleep" subtitle="Bedtime, wake time, subjective quality, and trends." />
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          <Card className="border-red-500/40 bg-red-500/5 p-4 text-sm text-ink">
-            <p className="font-medium text-red-700 dark:text-red-300">Supabase configuration</p>
-            <p className="mt-2 text-muted">{supabaseInitError}</p>
-          </Card>
-        </div>
+      <div className={cn("px-4 pb-10 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]")}>
+        <p className="text-sm text-red-600">{supabaseInitError}</p>
       </div>
     );
   }
 
   if (!supabase) {
     return (
-      <div>
-        <PageHeader title="Sleep" subtitle="Bedtime, wake time, subjective quality, and trends." />
-        <div className="mx-auto max-w-3xl space-y-4 px-4 pb-10">
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-56 w-full" />
-          <Skeleton className="h-64 w-full" />
-        </div>
+      <div className={cn("px-4 pb-10 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]")}>
+        <p className="text-muted">Loading…</p>
+      </div>
+    );
+  }
+
+  if (blockingSpinner && rows.length === 0 && !profile) {
+    return (
+      <div className="flex min-h-[40vh] flex-col items-center justify-center px-4 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]">
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" aria-hidden />
       </div>
     );
   }
 
   return (
-    <div>
-      <PageHeader title="Sleep" subtitle="Bedtime, wake time, subjective quality, and trends." />
+    <div className="relative mx-auto max-w-3xl px-4 pb-28 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] md:pb-10">
+      {offline && (
+        <div className="pointer-events-none fixed right-3 top-[calc(max(env(safe-area-inset-top,0px),16px)+10px)] z-50 rounded-full border border-line bg-surface/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted shadow-soft dark:bg-elevated">
+          Offline
+        </div>
+      )}
 
-      <div className="mx-auto max-w-3xl px-4 pb-10">
-        <Card id="log" className="scroll-mt-28 p-4 md:scroll-mt-24">
-          <CardTitle>Log sleep</CardTitle>
-          <CardDescription>Duration is calculated automatically from bed and wake times.</CardDescription>
-          <form className="mt-4 grid gap-4 sm:grid-cols-2" onSubmit={onSubmit}>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="s-date">Date (wake day)</Label>
-              <Input id="s-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="s-bed">Bedtime</Label>
-              <Input id="s-bed" type="time" value={bedtime} onChange={(e) => setBedtime(e.target.value)} required />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="s-wake">Wake time</Label>
-              <Input id="s-wake" type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} required />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="s-q">Quality (1–5)</Label>
-              <Select id="s-q" value={quality} onChange={(e) => setQuality(e.target.value)}>
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={String(n)}>
-                    {n} — {["Poor", "Fair", "OK", "Good", "Excellent"][n - 1]}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Calculated duration</Label>
-              <div className="flex h-11 items-center rounded-xl border border-line bg-elevated/60 px-3 text-sm font-medium text-ink">
-                {previewHours != null ? `${previewHours} hours` : "—"}
+      <header className="mb-8">
+        <h1 className="font-display text-4xl font-bold tracking-tight text-ink">SLEEP</h1>
+        <p className="mt-2 max-w-md text-sm text-muted">Editable until midnight. We color-code recovery quality.</p>
+      </header>
+
+      <form onSubmit={onSubmit}>
+        <div ref={logCardRef} id="sleep-log" className="scroll-mt-28 md:scroll-mt-24">
+          <Card className="border-line/80 bg-surface/80 p-5 dark:bg-elevated/60">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">Wake day</p>
+          <p className="mt-1 font-display text-lg font-semibold text-ink">{format(parseISO(`${date}T12:00:00`), "EEEE, MMMM d")}</p>
+
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-4 dark:bg-canvas/30">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Bedtime</span>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(bedtime)}</span>
+                <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
+              </div>
+              <input
+                type="time"
+                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                value={dbTimeToInput(bedtime)}
+                onChange={(e) => setBedtime(e.target.value)}
+                aria-label="Bedtime"
+              />
+            </label>
+            <label className="relative block min-h-[44px] cursor-pointer rounded-2xl border border-line bg-canvas/50 p-4 dark:bg-canvas/30">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Wake time</span>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="font-display text-2xl font-bold leading-none text-ink">{dbTimeToDisplay(wakeTime)}</span>
+                <Clock className="h-5 w-5 shrink-0 text-gold" aria-hidden />
+              </div>
+              <input
+                type="time"
+                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                value={dbTimeToInput(wakeTime)}
+                onChange={(e) => setWakeTime(e.target.value)}
+                aria-label="Wake time"
+              />
+            </label>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-line/60 bg-elevated/40 px-4 py-4 text-center dark:bg-black/20">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Total</p>
+            <p className={cn("mt-1 font-display text-3xl font-bold uppercase", totalTone)}>
+              {previewHours != null ? `${previewHours} hours` : "—"}
+            </p>
+          </div>
+
+          <details className="mt-6 rounded-2xl border border-line/60 bg-canvas/30 p-4 dark:bg-canvas/20">
+            <summary className="cursor-pointer text-sm font-semibold text-ink">Quality &amp; notes</summary>
+            <div className="mt-4 grid gap-4">
+              <div>
+                <Label htmlFor="s-q">Quality (1–5)</Label>
+                <Select id="s-q" className="mt-1.5 min-h-[44px]" value={quality} onChange={(e) => setQuality(e.target.value)}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <option key={n} value={String(n)}>
+                      {n} — {["Poor", "Fair", "OK", "Good", "Excellent"][n - 1]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="s-notes">Notes</Label>
+                <Textarea
+                  id="s-notes"
+                  className="mt-1.5 min-h-[88px]"
+                  placeholder="Dreams, disruptions, caffeine…"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
               </div>
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="s-notes">Notes</Label>
-              <Textarea id="s-notes" placeholder="Dreams, disruptions, caffeine…" value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </div>
-            <div className="sm:col-span-2">
-              <Button type="submit" disabled={saving}>
-                {saving ? "Saving…" : "Save sleep"}
+          </details>
+
+          <Button type="submit" className="mt-6 min-h-[48px] w-full" disabled={saving}>
+            {saving ? "Saving…" : "Save sleep"}
+          </Button>
+          </Card>
+        </div>
+      </form>
+
+      <section className="mt-10">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted">Last 7 nights</h2>
+        <div className="mt-4 flex gap-2">
+          {last7Days.map((d) => {
+            const ds = format(d, "yyyy-MM-dd");
+            const log = logForDate(ds);
+            const hours = log?.duration_hours != null ? Number(log.duration_hours) : null;
+            const pct = hours != null && sleepGoalHours > 0 ? Math.min(100, (hours / sleepGoalHours) * 100) : 0;
+            const met = hours != null && hours >= sleepGoalHours;
+            const logged = hours != null;
+            const fillClass = !logged ? "bg-line/25" : met ? "bg-emerald-500" : "bg-gold";
+            const isToday = ds === todayStr;
+            const letter = DOW_LETTER[d.getDay()];
+            return (
+              <button
+                key={ds}
+                type="button"
+                onClick={() => openDay(d)}
+                className="flex min-h-[44px] min-w-0 flex-1 flex-col items-center gap-2 rounded-xl p-1 transition hover:bg-elevated/50"
+              >
+                <div className="relative flex h-40 w-full max-w-[52px] flex-col justify-end overflow-hidden rounded-2xl bg-line/15 dark:bg-black/30">
+                  <div
+                    className={cn("w-full rounded-t-2xl transition-all", fillClass)}
+                    style={{ height: logged ? `${Math.max(8, pct)}%` : "4px" }}
+                  />
+                </div>
+                <span className={cn("text-[10px] font-semibold", isToday ? "text-gold" : "text-muted")}>{letter}</span>
+                <span className="text-[10px] text-muted">{hours != null ? `${hours}h` : "—"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="font-display text-lg font-semibold text-ink">History</h2>
+        <ul className="mt-4 divide-y divide-line/80 rounded-2xl border border-line/80">
+          {rows.length === 0 && <li className="px-4 py-10 text-center text-sm text-muted">No sleep logs yet.</li>}
+          {rows.map((r) => (
+            <li key={r.id} className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <button
+                type="button"
+                className="min-h-[44px] text-left"
+                onClick={() => openDay(parseISO(`${r.date}T12:00:00`))}
+              >
+                <p className="text-sm font-medium text-ink">{format(parseISO(`${r.date}T12:00:00`), "MMM d, yyyy")}</p>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", qualityDotClass(r.quality))} aria-hidden />
+                  <span>
+                    {fmtTime(r.bedtime)} → {fmtTime(r.wake_time)}
+                    {r.duration_hours != null ? ` · ${r.duration_hours} h` : ""}
+                  </span>
+                </p>
+                {r.notes && <p className="mt-1 text-sm text-muted">{r.notes}</p>}
+              </button>
+              <Button variant="ghost" type="button" className="min-h-[44px] self-start text-red-600" onClick={() => void removeRow(r.id)}>
+                Delete
               </Button>
-            </div>
-          </form>
-        </Card>
-
-        <Card className="mt-6 p-4">
-          <CardTitle>Duration (14 nights)</CardTitle>
-          <CardDescription>
-            Bars vs your goal of <span className="font-semibold text-gold">{sleepGoalHours}h</span> (gold = goal met).
-          </CardDescription>
-          <div className="mt-4">
-            {loading ? (
-              <Skeleton className="h-56 w-full" />
-            ) : (
-              <SleepDurationChart rows={rows} sleepGoalHours={sleepGoalHours} />
-            )}
-          </div>
-        </Card>
-
-        <Card className="mt-6 overflow-hidden p-0">
-          <div className="border-b border-line px-4 py-3">
-            <CardTitle className="text-base">History</CardTitle>
-            <CardDescription>Newest nights first.</CardDescription>
-          </div>
-          <ul className="divide-y divide-line/80">
-            {loading &&
-              Array.from({ length: 6 }).map((_, i) => (
-                <li key={i} className="px-4 py-3">
-                  <Skeleton className="h-12 w-full" />
-                </li>
-              ))}
-            {!loading && rows.length === 0 && (
-              <li className="px-4 py-10 text-center text-sm text-muted">No sleep logs yet.</li>
-            )}
-            {!loading &&
-              rows.map((r) => (
-                <li key={r.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-ink">{r.date}</p>
-                    <p className="text-xs text-muted">
-                      {fmtTime(r.bedtime)} → {fmtTime(r.wake_time)}
-                      {r.duration_hours != null ? ` · ${r.duration_hours} h` : ""}
-                      {r.quality != null ? ` · quality ${r.quality}/5` : ""}
-                    </p>
-                    {r.notes && <p className="mt-1 text-sm text-muted">{r.notes}</p>}
-                  </div>
-                  <Button variant="ghost" size="sm" type="button" className="self-start text-red-600" onClick={() => void removeRow(r.id)}>
-                    Delete
-                  </Button>
-                </li>
-              ))}
-          </ul>
-        </Card>
-      </div>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

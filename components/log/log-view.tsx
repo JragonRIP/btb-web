@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
-import type { FoodLog } from "@/types";
+import type { FoodLog, Profile } from "@/types";
 import { recomputeStreaks } from "@/lib/streak";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
@@ -12,51 +12,104 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  BTB_BOOT_SPINNER_MS,
+  readFoodTodayCache,
+  readProfileCache,
+  writeFoodTodayCache,
+  writeProfileCache,
+  profileCacheIsFresh,
+} from "@/lib/btb-local-cache";
 
 export function LogView() {
   const { client: supabase, error: envError } = useSupabaseBrowser();
   const [rows, setRows] = useState<FoodLog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [calGoal, setCalGoal] = useState(2500);
-  const [protGoal, setProtGoal] = useState(140);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [blockingSpinner, setBlockingSpinner] = useState(true);
+  const [offline, setOffline] = useState(false);
   const [name, setName] = useState("");
   const [cal, setCal] = useState("");
   const [prot, setProt] = useState("");
   const [saving, setSaving] = useState(false);
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const today = format(new Date(), "yyyy-MM-dd");
 
-  const load = useCallback(async () => {
+  const refreshRemote = useCallback(async () => {
     if (!supabase) return;
-    setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setLoading(false);
+      setBlockingSpinner(false);
       return;
     }
-    const [{ data: p }, { data: f }] = await Promise.all([
-      supabase.from("profiles").select("calorie_goal, protein_goal_g").eq("id", user.id).maybeSingle(),
-      supabase.from("food_logs").select("*").eq("user_id", user.id).eq("date", today).order("logged_at", { ascending: false }),
-    ]);
-    if (p) {
-      setCalGoal(p.calorie_goal ?? 2500);
-      setProtGoal(p.protein_goal_g ?? 140);
+
+    const pCached = readProfileCache(user.id);
+    const fCached = readFoodTodayCache(user.id, today);
+
+    if (pCached?.v) setProfile(pCached.v);
+    if (fCached?.v) setRows(fCached.v);
+
+    const hadProfileCache = Boolean(pCached?.v);
+    if (hadProfileCache) setBlockingSpinner(false);
+    else {
+      setBlockingSpinner(true);
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
     }
-    setRows((f ?? []) as FoodLog[]);
-    setLoading(false);
+
+    const needProfile = !pCached || !profileCacheIsFresh(pCached.ts);
+
+    try {
+      if (needProfile) {
+        const { data: p, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+        if (error) throw error;
+        if (p) {
+          const pr = p as Profile;
+          setProfile(pr);
+          writeProfileCache(user.id, pr);
+        }
+      }
+
+      const { data: f, error: fe } = await supabase
+        .from("food_logs")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("date", today)
+        .order("logged_at", { ascending: false });
+      if (fe) throw fe;
+      const list = (f ?? []) as FoodLog[];
+      setRows(list);
+      writeFoodTodayCache(user.id, today, list);
+      setOffline(false);
+    } catch {
+      setOffline(true);
+    } finally {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+      setBlockingSpinner(false);
+    }
   }, [supabase, today]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (supabase) void refreshRemote();
+    return () => {
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+    };
+  }, [refreshRemote, supabase]);
 
   const totals = useMemo(() => {
     const c = rows.reduce((a, r) => a + r.calories, 0);
     const p = rows.reduce((a, r) => a + Number(r.protein_g), 0);
     return { c, p };
   }, [rows]);
+
+  const calGoal = profile?.calorie_goal;
+  const protGoal = profile?.protein_goal_g;
+  const goalsReady = profile != null && calGoal != null && protGoal != null;
 
   async function addEntry(e: React.FormEvent) {
     e.preventDefault();
@@ -67,29 +120,60 @@ export function LogView() {
       toast.error("Fill food name, calories, and protein.");
       return;
     }
-    setSaving(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) {
-      setSaving(false);
-      return;
-    }
-    const { error } = await supabase.from("food_logs").insert({
+    if (!user) return;
+
+    const tempId = `tmp_${Date.now()}`;
+    const optimistic: FoodLog = {
+      id: tempId,
       user_id: user.id,
       date: today,
       name: name.trim(),
       calories: Math.round(calories),
       protein_g: protein,
+      logged_at: new Date().toISOString(),
+    };
+
+    setRows((prev) => {
+      const next = [optimistic, ...prev];
+      writeFoodTodayCache(user.id, today, next);
+      return next;
     });
-    if (error) toast.error(error.message);
-    else {
+    setName("");
+    setCal("");
+    setProt("");
+    setSaving(true);
+
+    const { data: inserted, error } = await supabase
+      .from("food_logs")
+      .insert({
+        user_id: user.id,
+        date: today,
+        name: optimistic.name,
+        calories: optimistic.calories,
+        protein_g: optimistic.protein_g,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      toast.error(error.message);
+      setRows((prev) => {
+        const next = prev.filter((r) => r.id !== tempId);
+        writeFoodTodayCache(user.id, today, next);
+        return next;
+      });
+    } else if (inserted) {
+      const row = inserted as FoodLog;
+      setRows((prev) => {
+        const next = prev.map((r) => (r.id === tempId ? row : r));
+        writeFoodTodayCache(user.id, today, next);
+        return next;
+      });
       toast.success("Logged");
-      setName("");
-      setCal("");
-      setProt("");
-      await load();
-      await recomputeStreaks(supabase, user.id);
+      void recomputeStreaks(supabase, user.id);
     }
     setSaving(false);
   }
@@ -99,12 +183,22 @@ export function LogView() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    if (!user) return;
+    const prev = rows;
+    setRows((r) => r.filter((x) => x.id !== id));
+    writeFoodTodayCache(
+      user.id,
+      today,
+      prev.filter((x) => x.id !== id)
+    );
     const { error } = await supabase.from("food_logs").delete().eq("id", id);
-    if (error) toast.error(error.message);
-    else {
+    if (error) {
+      toast.error(error.message);
+      setRows(prev);
+      writeFoodTodayCache(user.id, today, prev);
+    } else {
       toast.success("Removed");
-      await load();
-      if (user) await recomputeStreaks(supabase, user.id);
+      void recomputeStreaks(supabase, user.id);
     }
   }
 
@@ -126,14 +220,30 @@ export function LogView() {
     );
   }
 
+  if (blockingSpinner && !profile) {
+    return (
+      <div>
+        <PageHeader title="Log" subtitle="Food & nutrition" />
+        <div className="flex min-h-[40vh] flex-col items-center justify-center px-4">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" aria-hidden />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div>
+    <div className="relative">
+      {offline && (
+        <div className="pointer-events-none fixed right-3 top-[calc(max(env(safe-area-inset-top,0px),16px)+10px)] z-50 rounded-full border border-line bg-surface/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted shadow-soft dark:bg-elevated">
+          Offline
+        </div>
+      )}
       <PageHeader title="Log" subtitle="Track meals against your daily goals." />
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
         <Card className="p-4">
           <p className="text-center text-sm text-muted">Today</p>
           <p className="mt-1 text-center font-display text-xl font-bold text-gold">
-            {Math.round(totals.c)} / {calGoal} kcal · {Math.round(totals.p)}g / {protGoal}g protein
+            {Math.round(totals.c)} / {goalsReady ? calGoal : "—"} kcal · {Math.round(totals.p)}g / {goalsReady ? `${protGoal}g` : "—"} protein
           </p>
         </Card>
 
@@ -165,24 +275,22 @@ export function LogView() {
             <h2 className="font-display text-base font-semibold text-ink">Today&apos;s log</h2>
           </div>
           <ul className="divide-y divide-line/80">
-            {loading && <Skeleton className="m-4 h-24" />}
-            {!loading && rows.length === 0 && (
+            {rows.length === 0 && (
               <li className="px-4 py-10 text-center text-sm text-muted">No entries yet.</li>
             )}
-            {!loading &&
-              rows.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-                  <div>
-                    <p className="font-medium text-ink">{r.name}</p>
-                    <p className="text-xs text-muted">
-                      {r.calories} kcal · {r.protein_g}g protein · {format(new Date(r.logged_at), "h:mm a")}
-                    </p>
-                  </div>
-                  <Button type="button" variant="ghost" className="min-h-[44px] text-red-600" onClick={() => void remove(r.id)}>
-                    Delete
-                  </Button>
-                </li>
-              ))}
+            {rows.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+                <div>
+                  <p className="font-medium text-ink">{r.name}</p>
+                  <p className="text-xs text-muted">
+                    {r.calories} kcal · {r.protein_g}g protein · {format(new Date(r.logged_at), "h:mm a")}
+                  </p>
+                </div>
+                <Button type="button" variant="ghost" className="min-h-[44px] text-red-600" onClick={() => void remove(r.id)}>
+                  Delete
+                </Button>
+              </li>
+            ))}
           </ul>
         </Card>
       </div>

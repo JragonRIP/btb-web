@@ -50,4 +50,11 @@
   .border-line {
     border-color: rgb(var(--line) / var(--line-a));
   }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }

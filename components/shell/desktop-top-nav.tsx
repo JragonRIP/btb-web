@@ -17,7 +17,7 @@ export function DesktopTopNav() {
   const pathname = usePathname();
 
   return (
-    <div className="sticky top-0 z-30 hidden border-b border-line/80 bg-canvas/85 pt-[calc(env(safe-area-inset-top,0px)+8px)] backdrop-blur-md md:block">
+    <div className="sticky top-0 z-30 hidden border-b border-line/80 bg-canvas/85 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] backdrop-blur-md md:block">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 pb-3">
         <div className="flex flex-1 flex-wrap items-center justify-center gap-1">
           {items.map(({ href, label, icon: Icon }) => {

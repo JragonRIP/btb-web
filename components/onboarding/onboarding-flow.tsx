@@ -9,6 +9,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { format } from "date-fns";
+import type { Profile } from "@/types";
+import { writeProfileCache } from "@/lib/btb-local-cache";
 
 const SLEEP_MIN = 6;
 const SLEEP_MAX = 10;
@@ -107,6 +109,13 @@ export function OnboardingFlow() {
     setBusy(true);
     try {
       await upsertProfile({ onboarding_completed: true });
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        const { data: full } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+        if (full) writeProfileCache(user.id, full as Profile);
+      }
       toast.success("You're all set!");
       router.push(goSetup ? "/workout/setup" : "/home");
       router.refresh();

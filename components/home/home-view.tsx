@@ -18,12 +18,25 @@ import {
   buildWeeklySummaryStats,
   type WeeklySummaryStats,
 } from "@/components/summary/weekly-summary-modal";
+import {
+  BTB_BOOT_SPINNER_MS,
+  readFoodTodayCache,
+  readLastSleepCache,
+  readProfileCache,
+  readWeekHomeCache,
+  writeFoodTodayCache,
+  writeLastSleepCache,
+  writeProfileCache,
+  writeWeekHomeCache,
+  profileCacheIsFresh,
+} from "@/lib/btb-local-cache";
 
 const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"] as const;
 
+const safeTop = "pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]";
+
 export function HomeView() {
   const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
-  const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [foodToday, setFoodToday] = useState<FoodLog[]>([]);
   const [lastSleep, setLastSleep] = useState<SleepLog | null>(null);
@@ -37,8 +50,12 @@ export function HomeView() {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryStats, setSummaryStats] = useState<WeeklySummaryStats | null>(null);
   const [summaryBusy, setSummaryBusy] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [blockingSpinner, setBlockingSpinner] = useState(true);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const touchRef = useRef<{ x: number } | null>(null);
   const summaryFired = useRef(false);
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const isFri = isFriday(new Date());
@@ -54,57 +71,104 @@ export function HomeView() {
     setFridayDismissed(localStorage.getItem(k) === "1");
   }, [isFri, todayStr]);
 
-  const load = useCallback(async () => {
+  const refreshRemote = useCallback(async () => {
     if (!supabase) return;
-    setLoading(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      setLoading(false);
+      setBlockingSpinner(false);
+      setBootstrapped(true);
       return;
     }
-
-    const [{ data: p }, { data: ft }, { data: sl }] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
-      supabase.from("food_logs").select("*").eq("user_id", user.id).eq("date", todayStr).order("logged_at", { ascending: false }),
-      supabase.from("sleep_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(1),
-    ]);
-
-    setProfile((p ?? null) as Profile | null);
-    setFoodToday((ft ?? []) as FoodLog[]);
-    setLastSleep((sl?.[0] ?? null) as SleepLog | null);
 
     const anchor = subWeeks(startOfWeek(new Date(), { weekStartsOn: 1 }), weekOffset);
     const wkStart = format(anchor, "yyyy-MM-dd");
     const wkEnd = format(addDays(anchor, 7), "yyyy-MM-dd");
 
-    const { data: wf } = await supabase
-      .from("food_logs")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("date", wkStart)
-      .lt("date", wkEnd);
-    setWeekFood((wf ?? []) as FoodLog[]);
+    const pCached = readProfileCache(user.id);
+    const fCached = readFoodTodayCache(user.id, todayStr);
+    const sCached = readLastSleepCache(user.id);
+    const wCached = readWeekHomeCache(user.id, wkStart);
 
-    const { data: ww } = await supabase
-      .from("workout_logs")
-      .select("date, completed")
-      .eq("user_id", user.id)
-      .gte("date", wkStart)
-      .lt("date", wkEnd);
-    setWeekWorkouts((ww ?? []) as { date: string; completed: boolean }[]);
+    if (pCached?.v) setProfile(pCached.v);
+    if (fCached?.v) setFoodToday(fCached.v);
+    if (sCached) setLastSleep(sCached.v);
+    if (wCached?.v) {
+      setWeekFood(wCached.v.food);
+      setWeekWorkouts(wCached.v.workouts);
+    }
 
-    setLoading(false);
+    const hadProfileCache = Boolean(pCached?.v);
+    if (hadProfileCache) setBlockingSpinner(false);
+    else {
+      setBlockingSpinner(true);
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
+    }
+
+    const needProfileFetch = !pCached || !profileCacheIsFresh(pCached.ts);
+
+    try {
+      if (needProfileFetch) {
+        const { data: p, error } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+        if (error) throw error;
+        const pRow = (p ?? null) as Profile | null;
+        if (pRow) {
+          setProfile(pRow);
+          writeProfileCache(user.id, pRow);
+        }
+      }
+
+      const [{ data: ft }, { data: sl }, { data: wf }, { data: ww }] = await Promise.all([
+        supabase.from("food_logs").select("*").eq("user_id", user.id).eq("date", todayStr).order("logged_at", { ascending: false }),
+        supabase.from("sleep_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(1),
+        supabase
+          .from("food_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .gte("date", wkStart)
+          .lt("date", wkEnd),
+        supabase.from("workout_logs").select("date, completed").eq("user_id", user.id).gte("date", wkStart).lt("date", wkEnd),
+      ]);
+
+      const food = (ft ?? []) as FoodLog[];
+      const sleepRow = (sl?.[0] ?? null) as SleepLog | null;
+      const wfRows = (wf ?? []) as FoodLog[];
+      const wwRows = (ww ?? []) as { date: string; completed: boolean }[];
+
+      setFoodToday(food);
+      setLastSleep(sleepRow);
+      setWeekFood(wfRows);
+      setWeekWorkouts(wwRows);
+
+      writeFoodTodayCache(user.id, todayStr, food);
+      writeLastSleepCache(user.id, sleepRow);
+      writeWeekHomeCache(user.id, wkStart, { food: wfRows, workouts: wwRows });
+
+      setOffline(false);
+    } catch {
+      setOffline(true);
+    } finally {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+      setBlockingSpinner(false);
+      setBootstrapped(true);
+    }
   }, [supabase, todayStr, weekOffset]);
 
   useEffect(() => {
-    if (supabase) void load();
-  }, [load, supabase]);
+    if (supabase) void refreshRemote();
+    return () => {
+      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
+    };
+  }, [refreshRemote, supabase]);
 
   /** Sunday summary gate (once per session) */
   useEffect(() => {
-    if (!supabase || loading || summaryFired.current) return;
+    if (!supabase || !bootstrapped || summaryFired.current) return;
     (async () => {
       const d = new Date();
       if (d.getDay() !== 0) return;
@@ -125,7 +189,7 @@ export function HomeView() {
       setSummaryStats(stats);
       setSummaryOpen(true);
     })();
-  }, [supabase, loading]);
+  }, [supabase, bootstrapped]);
 
   const totals = useMemo(() => {
     const cal = foodToday.reduce((a, r) => a + r.calories, 0);
@@ -133,16 +197,16 @@ export function HomeView() {
     return { cal, prot };
   }, [foodToday]);
 
-  const calGoal = profile?.calorie_goal ?? 2500;
-  const protGoal = profile?.protein_goal_g ?? 140;
-  const displayName = profile?.name?.trim() || "there";
-
-  const greeting = useMemo(() => {
+  const calGoal = profile?.calorie_goal;
+  const protGoal = profile?.protein_goal_g;
+  const goalsReady = profile != null && calGoal != null && protGoal != null;
+  const displayName = profile?.name?.trim();
+  const greetingLine = useMemo(() => {
     const h = now.getHours();
-    if (h < 12) return "Good Morning";
-    if (h < 17) return "Good Afternoon";
-    return "Good Evening";
-  }, [now]);
+    const base = h < 12 ? "Good Morning" : h < 17 ? "Good Afternoon" : "Good Evening";
+    if (displayName) return `${base}, ${displayName}`;
+    return base;
+  }, [now, displayName]);
 
   const weekDays = useMemo(() => {
     const anchor = subWeeks(startOfWeek(new Date(), { weekStartsOn: 1 }), weekOffset);
@@ -165,7 +229,7 @@ export function HomeView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
-    const { error } = await supabase.from("weight_logs").insert({
+      const { error } = await supabase.from("weight_logs").insert({
       user_id: user.id,
       date: todayStr,
       weight_lbs: w,
@@ -174,9 +238,15 @@ export function HomeView() {
     else {
       toast.success("Weight logged");
       await supabase.from("profiles").update({ weight_lbs: w }).eq("id", user.id);
+      const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+      if (p) {
+        const next = p as Profile;
+        setProfile(next);
+        writeProfileCache(user.id, next);
+      }
       setFridayWeight("");
       void dismissFriday();
-      void load();
+      void refreshRemote();
     }
   }
 
@@ -221,26 +291,38 @@ export function HomeView() {
 
   if (!supabase) {
     return (
-      <div className="space-y-4 px-4 pb-8 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
+      <div className={cn("space-y-4 px-4 pb-8", safeTop)}>
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-40 w-full" />
       </div>
     );
   }
 
+  if (blockingSpinner && !profile) {
+    return (
+      <div className={cn("flex min-h-[50vh] flex-col items-center justify-center px-4", safeTop)}>
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" aria-hidden />
+        <p className="mt-4 text-sm text-muted">Loading your dashboard…</p>
+      </div>
+    );
+  }
+
   return (
     <div
-      className="mx-auto w-full max-w-3xl px-4 pb-28 pt-[calc(env(safe-area-inset-top,0px)+12px)] md:pb-10"
+      className={cn("relative mx-auto w-full max-w-3xl px-4 pb-28 md:pb-10", safeTop)}
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
     >
+      {offline && (
+        <div className="pointer-events-none fixed right-3 top-[calc(max(env(safe-area-inset-top,0px),16px)+10px)] z-50 rounded-full border border-line bg-surface/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted shadow-soft dark:bg-elevated">
+          Offline
+        </div>
+      )}
       <div className="mb-6 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs text-muted">{format(now, "EEEE, MMMM d")}</p>
           <p className="mt-1 font-mono text-lg font-medium text-gold">{format(now, "h:mm a")}</p>
-          <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-gold md:text-4xl">
-            {greeting}, {displayName}
-          </h1>
+          <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-gold md:text-4xl">{greetingLine}</h1>
         </div>
         <Link
           href="/settings"
@@ -277,17 +359,17 @@ export function HomeView() {
         <Card className="flex flex-col items-center py-6">
           <RingProgress
             label="Calories"
-            value={totals.cal}
-            max={calGoal}
-            sublabel={`${Math.round(totals.cal)} / ${calGoal}`}
+            value={goalsReady ? totals.cal : 0}
+            max={goalsReady ? calGoal! : 1}
+            sublabel={goalsReady ? `${Math.round(totals.cal)} / ${calGoal}` : `${Math.round(totals.cal)} / —`}
           />
         </Card>
         <Card className="flex flex-col items-center py-6">
           <RingProgress
             label="Protein"
-            value={totals.prot}
-            max={protGoal}
-            sublabel={`${Math.round(totals.prot)}g / ${protGoal}g`}
+            value={goalsReady ? totals.prot : 0}
+            max={goalsReady ? protGoal! : 1}
+            sublabel={goalsReady ? `${Math.round(totals.prot)}g / ${protGoal}g` : `${Math.round(totals.prot)}g / —`}
           />
         </Card>
       </div>
@@ -321,50 +403,48 @@ export function HomeView() {
         <p className="text-xs text-muted">Swipe for past weeks · {weekOffset === 0 ? "Current" : `${weekOffset} wk ago`}</p>
       </div>
       <Card className="mb-10 p-4">
-        {loading ? (
-          <Skeleton className="h-32 w-full" />
-        ) : (
-          <div className="flex justify-between gap-1">
-            {weekDays.map((d, i) => {
-              const ds = format(d, "yyyy-MM-dd");
-              const isToday = ds === todayStr;
-              const dayFood = weekFood.filter((f) => f.date === ds);
-              const cals = dayFood.reduce((a, f) => a + f.calories, 0);
-              const prot = dayFood.reduce((a, f) => a + Number(f.protein_g), 0);
-              const wk = weekWorkouts.find((w) => w.date === ds);
-              const hCal = Math.min(100, (cals / calGoal) * 100);
-              const hProt = Math.min(100, (prot / protGoal) * 100);
-              const hWk = wk?.completed ? 100 : 0;
-              return (
-                <button
-                  key={ds}
-                  type="button"
-                  className={cn(
-                    "flex min-h-[44px] min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-0.5 py-2 transition",
-                    isToday && "bg-gold/10 ring-1 ring-gold/40"
-                  )}
-                  onClick={() => setSelectedDay(selectedDay === ds ? null : ds)}
-                >
-                  <span className="text-[10px] font-semibold text-muted">{DAY_LABELS[i]}</span>
-                  <div className="flex h-24 w-full max-w-[40px] items-end justify-center gap-0.5">
-                    {[
-                      { h: hCal, c: "bg-gold" },
-                      { h: hProt, c: "bg-gold/70" },
-                      { h: hWk, c: "bg-white/60 dark:bg-white/35" },
-                    ].map((bar, bi) => (
-                      <div key={bi} className="flex h-full w-2 flex-col justify-end rounded-sm bg-line/25">
-                        <div
-                          className={cn("w-full rounded-t-sm transition-all", bar.c)}
-                          style={{ height: `${Math.max(2, (bar.h / 100) * 96)}px` }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <div className="flex justify-between gap-1">
+          {weekDays.map((d, i) => {
+            const ds = format(d, "yyyy-MM-dd");
+            const isToday = ds === todayStr;
+            const dayFood = weekFood.filter((f) => f.date === ds);
+            const cals = dayFood.reduce((a, f) => a + f.calories, 0);
+            const prot = dayFood.reduce((a, f) => a + Number(f.protein_g), 0);
+            const wk = weekWorkouts.find((w) => w.date === ds);
+            const cg = goalsReady ? calGoal! : 0;
+            const pg = goalsReady ? protGoal! : 0;
+            const hCal = cg > 0 ? Math.min(100, (cals / cg) * 100) : 0;
+            const hProt = pg > 0 ? Math.min(100, (prot / pg) * 100) : 0;
+            const hWk = wk?.completed ? 100 : 0;
+            return (
+              <button
+                key={ds}
+                type="button"
+                className={cn(
+                  "flex min-h-[44px] min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-0.5 py-2 transition",
+                  isToday && "bg-gold/10 ring-1 ring-gold/40"
+                )}
+                onClick={() => setSelectedDay(selectedDay === ds ? null : ds)}
+              >
+                <span className="text-[10px] font-semibold text-muted">{DAY_LABELS[i]}</span>
+                <div className="flex h-24 w-full max-w-[40px] items-end justify-center gap-0.5">
+                  {[
+                    { h: hCal, c: "bg-gold" },
+                    { h: hProt, c: "bg-gold/70" },
+                    { h: hWk, c: "bg-white/60 dark:bg-white/35" },
+                  ].map((bar, bi) => (
+                    <div key={bi} className="flex h-full w-2 flex-col justify-end rounded-sm bg-line/25">
+                      <div
+                        className={cn("w-full rounded-t-sm transition-all", bar.c)}
+                        style={{ height: `${Math.max(2, (bar.h / 100) * 96)}px` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
         {selectedDay && (
           <p className="mt-3 rounded-lg bg-elevated/80 px-3 py-2 text-center text-xs text-muted">
             {format(parseISO(selectedDay + "T12:00:00"), "EEEE, MMM d")} — tap day again to close
