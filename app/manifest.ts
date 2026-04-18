@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Build The Body",
     short_name: "Build The Body",
     description: "Personal health tracker for workouts, measurements, and sleep.",
-    start_url: "/dashboard",
+    start_url: "/home",
     display: "standalone",
     background_color: "#faf6ed",
     theme_color: "#b8860b",

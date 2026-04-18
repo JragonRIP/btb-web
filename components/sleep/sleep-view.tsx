@@ -20,6 +20,7 @@ export function SleepView() {
   const { client: supabase, error: supabaseInitError } = useSupabaseBrowser();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SleepLog[]>([]);
+  const [sleepGoalHours, setSleepGoalHours] = useState(9);
 
   const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [bedtime, setBedtime] = useState("22:30");
@@ -36,6 +37,13 @@ export function SleepView() {
   const load = useCallback(async () => {
     if (!supabase) return;
     setLoading(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const { data: prof } = await supabase.from("profiles").select("sleep_goal_hours").eq("id", user.id).maybeSingle();
+      if (prof?.sleep_goal_hours != null) setSleepGoalHours(Number(prof.sleep_goal_hours));
+    }
     const { data, error } = await supabase.from("sleep_logs").select("*").order("date", { ascending: false }).limit(200);
     if (error) toast.error(error.message);
     setRows((data ?? []) as SleepLog[]);
@@ -178,8 +186,16 @@ export function SleepView() {
 
         <Card className="mt-6 p-4">
           <CardTitle>Duration (14 nights)</CardTitle>
-          <CardDescription>Recent sleep length per night.</CardDescription>
-          <div className="mt-4">{loading ? <Skeleton className="h-56 w-full" /> : <SleepDurationChart rows={rows} />}</div>
+          <CardDescription>
+            Bars vs your goal of <span className="font-semibold text-gold">{sleepGoalHours}h</span> (gold = goal met).
+          </CardDescription>
+          <div className="mt-4">
+            {loading ? (
+              <Skeleton className="h-56 w-full" />
+            ) : (
+              <SleepDurationChart rows={rows} sleepGoalHours={sleepGoalHours} />
+            )}
+          </div>
         </Card>
 
         <Card className="mt-6 overflow-hidden p-0">

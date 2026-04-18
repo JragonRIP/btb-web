@@ -89,3 +89,6 @@ create policy "sleep_update_own"
 create policy "sleep_delete_own"
   on public.sleep_logs for delete
   using (auth.uid() = user_id);
+
+-- Additional tables (profiles, weekly plan, food logs, PRs, weight logs, summaries):
+-- apply supabase/migrations/002_redesign.sql after this file on new projects.

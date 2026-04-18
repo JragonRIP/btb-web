@@ -1,5 +1,5 @@
-import { WorkoutsView } from "@/components/workouts/workouts-view";
+import { redirect } from "next/navigation";
 
-export default function WorkoutsPage() {
-  return <WorkoutsView />;
+export default function LegacyWorkoutsPage() {
+  redirect("/workout");
 }

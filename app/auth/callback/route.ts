@@ -6,7 +6,7 @@ import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/env";
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const next = requestUrl.searchParams.get("next") ?? "/dashboard";
+  const next = requestUrl.searchParams.get("next") ?? "/home";
   const origin = requestUrl.origin;
 
   if (code) {

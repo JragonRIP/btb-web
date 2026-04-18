@@ -1,7 +1,18 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createSupabaseMiddlewareClient } from "@/lib/supabase/middleware";
 
-const protectedPrefixes = ["/dashboard", "/workouts", "/measurements", "/sleep"];
+const protectedPrefixes = [
+  "/home",
+  "/workout",
+  "/log",
+  "/sleep",
+  "/prs",
+  "/settings",
+  "/onboarding",
+  "/dashboard",
+  "/workouts",
+  "/measurements",
+];
 
 export async function middleware(request: NextRequest) {
   const { supabase, response } = createSupabaseMiddlewareClient(request);
@@ -27,7 +38,7 @@ export async function middleware(request: NextRequest) {
 
   if (isAuthArea && user && (path === "/auth/login" || path === "/auth/signup")) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/home";
     url.searchParams.delete("next");
     return NextResponse.redirect(url);
   }

@@ -1,5 +1,5 @@
-import { MeasurementsView } from "@/components/measurements/measurements-view";
+import { redirect } from "next/navigation";
 
-export default function MeasurementsPage() {
-  return <MeasurementsView />;
+export default function LegacyMeasurementsPage() {
+  redirect("/log");
 }

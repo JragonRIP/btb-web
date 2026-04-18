@@ -2,9 +2,11 @@
 
 import { useMemo } from "react";
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,23 +15,23 @@ import {
 import { format, parseISO, subDays } from "date-fns";
 import type { SleepLog } from "@/types";
 
-export function SleepDurationChart({ rows }: { rows: SleepLog[] }) {
+export function SleepDurationChart({ rows, sleepGoalHours }: { rows: SleepLog[]; sleepGoalHours: number }) {
   const data = useMemo(() => {
     const end = new Date();
-    const start = subDays(end, 13);
-    const days: { key: string; label: string; hours: number | null }[] = [];
+    const days: { key: string; label: string; hours: number | null; hit: boolean }[] = [];
     for (let i = 0; i < 14; i++) {
       const d = subDays(end, 13 - i);
       const key = format(d, "yyyy-MM-dd");
-      days.push({ key, label: format(d, "EEE M d"), hours: null });
+      days.push({ key, label: format(d, "EEE d"), hours: null, hit: false });
     }
     const byDate = new Map(rows.map((r) => [r.date, r]));
     return days.map((d) => {
       const log = byDate.get(d.key);
       const hours = log?.duration_hours != null ? Number(log.duration_hours) : null;
-      return { ...d, hours };
+      const hit = hours != null && hours >= sleepGoalHours;
+      return { ...d, hours, hit };
     });
-  }, [rows]);
+  }, [rows, sleepGoalHours]);
 
   const hasAny = data.some((d) => d.hours != null);
   if (!hasAny) {
@@ -39,13 +41,7 @@ export function SleepDurationChart({ rows }: { rows: SleepLog[] }) {
   return (
     <div className="h-56 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="sleepFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgb(var(--gold))" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="rgb(var(--gold))" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+        <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgb(var(--line) / 0.12)" />
           <XAxis dataKey="label" tick={{ fill: "rgb(var(--muted))", fontSize: 10 }} axisLine={false} tickLine={false} interval={2} />
           <YAxis
@@ -54,6 +50,12 @@ export function SleepDurationChart({ rows }: { rows: SleepLog[] }) {
             axisLine={false}
             tickLine={false}
             tickFormatter={(v) => `${v}h`}
+          />
+          <ReferenceLine
+            y={sleepGoalHours}
+            stroke="rgb(var(--gold))"
+            strokeDasharray="4 4"
+            label={{ value: "Goal", fill: "rgb(var(--muted))", fontSize: 10 }}
           />
           <Tooltip
             contentStyle={{
@@ -69,19 +71,24 @@ export function SleepDurationChart({ rows }: { rows: SleepLog[] }) {
             }}
             formatter={(value) => {
               const n = typeof value === "number" ? value : Number(value);
-              return Number.isFinite(n) ? [`${n} h`, "Duration"] : ["—", "Duration"];
+              return Number.isFinite(n) ? [`${n} h`, "Sleep"] : ["—", "Sleep"];
             }}
           />
-          <Area
-            type="monotone"
-            dataKey="hours"
-            stroke="rgb(var(--gold))"
-            fill="url(#sleepFill)"
-            strokeWidth={2}
-            connectNulls
-            dot={{ r: 2, strokeWidth: 0, fill: "rgb(var(--gold))" }}
-          />
-        </AreaChart>
+          <Bar dataKey="hours" radius={[6, 6, 0, 0]} maxBarSize={28}>
+            {data.map((entry, i) => (
+              <Cell
+                key={i}
+                fill={
+                  entry.hours == null
+                    ? "rgb(var(--line) / 0.15)"
+                    : entry.hit
+                      ? "rgb(var(--gold))"
+                      : "rgb(var(--muted) / 0.45)"
+                }
+              />
+            ))}
+          </Bar>
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );

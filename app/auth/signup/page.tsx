@@ -31,7 +31,7 @@ export default function SignupPage() {
       toast.error(error.message);
     } else if (data.session) {
       toast.success("Account created");
-      router.push("/dashboard");
+      router.push("/home");
       router.refresh();
     } else {
       toast.success("Check your email to confirm your account.");
