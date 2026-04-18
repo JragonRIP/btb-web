@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Build The Body
 
-## Getting Started
+A personal health Progressive Web App built with **Next.js 14** (App Router), **TypeScript**, **Tailwind CSS**, and **Supabase** (Postgres + Auth). Track workouts, body measurements, and sleep with charts, a unified dashboard, and offline-capable installability.
 
-First, run the development server:
+Authentication uses Supabase with cookie-based sessions via [`@supabase/ssr`](https://supabase.com/docs/guides/auth/server-side/nextjs) (the supported replacement for the deprecated `@supabase/auth-helpers-nextjs` package).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Prerequisites
+
+- Node.js 18+
+- A [Supabase](https://supabase.com/) project
+
+## Quick start
+
+1. **Clone and install**
+
+   ```bash
+   git clone <your-repo-url> btb-web
+   cd btb-web
+   npm install
+   ```
+
+2. **Environment variables**
+
+   Copy the example file and add your Supabase URL and anon key (Project Settings → API in the Supabase dashboard):
+
+   ```bash
+   cp .env.local.example .env.local
+   ```
+
+   Required keys:
+
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+3. **Database schema**
+
+   In the Supabase SQL editor, run the script in `supabase/schema.sql`. It creates `workouts`, `measurements`, and `sleep_logs` with **Row Level Security** so each user only sees their own rows.
+
+4. **Auth URLs (magic link / email confirm)**
+
+   In Supabase → Authentication → URL configuration, add your local and production URLs, for example:
+
+   - Site URL: `http://localhost:3000` (dev) or your Vercel URL (prod)
+   - Redirect URLs: `http://localhost:3000/auth/callback`, `https://<your-domain>/auth/callback`
+
+5. **Run locally**
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000). The service worker from `next-pwa` is disabled in development; production builds enable offline caching for the app shell.
+
+## Deploy to Vercel
+
+1. Push the repository to GitHub.
+2. Import the repo in [Vercel](https://vercel.com/) and set the same environment variables as in `.env.local`.
+3. Deploy. No `vercel.json` is required for a standard Next.js deployment; optional headers or redirects can be added later if needed.
+
+## PWA icons
+
+Gold/dark placeholder icons are generated as `public/icon-192.png` and `public/icon-512.png`. Regenerate on Windows with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/generate-pwa-icons.ps1
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Project structure
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+app/
+  (main)/           # Authenticated shell (nav + trackers)
+  auth/             # Login, signup, OAuth/magic-link callback
+  manifest.ts       # Web app manifest
+components/
+lib/
+  supabase/         # Supabase browser/server/middleware helpers
+  supabaseClient.ts # Re-export of browser client
+types/
+supabase/schema.sql
+.env.local.example
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+| Command       | Description        |
+| ------------- | ------------------ |
+| `npm run dev` | Start dev server   |
+| `npm run build` | Production build |
+| `npm run start` | Start production server |
+| `npm run lint`  | ESLint             |
 
-To learn more about Next.js, take a look at the following resources:
+## License
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Private / your terms.
