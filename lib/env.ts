@@ -1,16 +1,23 @@
 /**
- * Supabase public config from Next.js env.
- * - No placeholder fallbacks (wrong host caused opaque "Load failed" fetches).
+ * Supabase public config.
+ * - Prefer `NEXT_PUBLIC_SUPABASE_*` from the environment (Vercel, .env.local).
+ * - **Temporary:** hardcoded fallbacks so the app works if host env is not applied to the build.
  * - Trims whitespace and optional surrounding quotes (common .env mistakes).
  * - Strips trailing slashes on the project URL.
  */
-function readPublicEnv(name: "NEXT_PUBLIC_SUPABASE_URL" | "NEXT_PUBLIC_SUPABASE_ANON_KEY"): string {
+
+/** @deprecated Remove fallbacks once Vercel env vars are confirmed on Production + Preview builds. */
+const FALLBACK_SUPABASE_URL = "https://mgigodwyyivmehinklfg.supabase.co";
+
+/** @deprecated Remove fallbacks once Vercel env vars are confirmed on Production + Preview builds. */
+const FALLBACK_SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1naWdvZHd5eWl2bWVoaW5rbGZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1NDQ0OTgsImV4cCI6MjA5MjEyMDQ5OH0.q_7qHvfo7x2diWGMuVVmwwWnsRq-n4cd-REczHPgreY";
+
+function readOptionalPublicEnv(
+  name: "NEXT_PUBLIC_SUPABASE_URL" | "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+): string | undefined {
   const raw = process.env[name];
-  if (typeof raw !== "string") {
-    throw new Error(
-      `${name} is missing. Add it to .env.local (local) or your host’s environment (e.g. Vercel), then restart the dev server or rebuild.`
-    );
-  }
+  if (typeof raw !== "string") return undefined;
   let v = raw.trim();
   if (
     (v.startsWith('"') && v.endsWith('"')) ||
@@ -18,22 +25,20 @@ function readPublicEnv(name: "NEXT_PUBLIC_SUPABASE_URL" | "NEXT_PUBLIC_SUPABASE_
   ) {
     v = v.slice(1, -1).trim();
   }
-  if (!v) {
-    throw new Error(`${name} is set but empty after trimming.`);
-  }
-  return v;
+  return v || undefined;
 }
 
 export function getSupabaseUrl(): string {
-  const url = readPublicEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const fromEnv = readOptionalPublicEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const url = (fromEnv ?? FALLBACK_SUPABASE_URL).replace(/\/+$/, "");
   if (!/^https:\/\//i.test(url)) {
     throw new Error(
       "NEXT_PUBLIC_SUPABASE_URL must be an https URL (e.g. https://xxxx.supabase.co)."
     );
   }
-  return url.replace(/\/+$/, "");
+  return url;
 }
 
 export function getSupabaseAnonKey(): string {
-  return readPublicEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  return readOptionalPublicEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY") ?? FALLBACK_SUPABASE_ANON_KEY;
 }
