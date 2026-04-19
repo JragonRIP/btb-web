@@ -269,3 +269,75 @@
   }
 }
 
+/* Sonner — Build The Body theme (Toaster `theme` = resolved light|dark from next-themes) */
+[data-sonner-toaster][data-theme="light"] {
+  --border-radius: 12px !important;
+  --normal-bg: #ffffff !important;
+  --normal-text: #0a0a0a !important;
+  --normal-border: rgba(180, 140, 0, 0.25) !important;
+  --normal-bg-hover: #fafafa !important;
+  --normal-border-hover: rgba(180, 140, 0, 0.4) !important;
+
+  --success-bg: #ffffff !important;
+  --success-border: rgba(184, 150, 12, 0.45) !important;
+  --success-text: #b8960c !important;
+
+  --error-bg: #ffffff !important;
+  --error-border: rgba(239, 68, 68, 0.45) !important;
+  --error-text: #ef4444 !important;
+
+  --info-bg: #ffffff !important;
+  --info-border: rgba(180, 140, 0, 0.25) !important;
+  --info-text: #0a0a0a !important;
+
+  --warning-bg: #fffbeb !important;
+  --warning-border: rgba(184, 150, 12, 0.35) !important;
+  --warning-text: #854d0e !important;
+}
+
+[data-sonner-toaster][data-theme="dark"] {
+  --border-radius: 12px !important;
+  --normal-bg: #1a1a1a !important;
+  --normal-text: #ffffff !important;
+  --normal-border: rgba(245, 197, 24, 0.3) !important;
+  --normal-bg-hover: #242424 !important;
+  --normal-border-hover: rgba(245, 197, 24, 0.45) !important;
+
+  --success-bg: #1a1a1a !important;
+  --success-border: rgba(245, 197, 24, 0.45) !important;
+  --success-text: #f5c518 !important;
+
+  --error-bg: #1a1a1a !important;
+  --error-border: rgba(239, 68, 68, 0.5) !important;
+  --error-text: #ef4444 !important;
+
+  --info-bg: #1a1a1a !important;
+  --info-border: rgba(245, 197, 24, 0.3) !important;
+  --info-text: #ffffff !important;
+
+  --warning-bg: #1a1a1a !important;
+  --warning-border: rgba(245, 197, 24, 0.4) !important;
+  --warning-text: #fcd34d !important;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 0.08);
+}
+
+.dark [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.45);
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="success"] [data-icon] {
+  color: #b8960c;
+}
+
+.dark [data-rich-colors="true"][data-sonner-toast][data-type="success"] [data-icon] {
+  color: #f5c518;
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="error"] [data-icon] {
+  color: #ef4444;
+}
+
