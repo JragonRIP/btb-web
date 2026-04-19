@@ -41,6 +41,14 @@ function emptyRow(userId: string, dow: number): WeeklyWorkoutPlanRow {
   };
 }
 
+/** Supabase-backed configuration: exercises, or an explicit rest day. */
+function isDayConfiguredInDb(row: WeeklyWorkoutPlanRow | undefined): boolean {
+  if (!row) return false;
+  const dt = row.day_type as DayType;
+  if (dt === "active_rest" || dt === "full_rest") return true;
+  return Array.isArray(row.exercises) && row.exercises.length > 0;
+}
+
 async function upsertPlanDay(supabase: SupabaseClient, userId: string, row: WeeklyWorkoutPlanRow) {
   const payload = {
     user_id: userId,
@@ -70,6 +78,8 @@ export function WorkoutSetupFlowView() {
   rowsByDowRef.current = rowsByDow;
   const monIdxRef = useRef(monIdx);
   monIdxRef.current = monIdx;
+  /** Last known server rows for this user (updated on load and after each successful persist). */
+  const dbRowsByDowRef = useRef<Map<number, WeeklyWorkoutPlanRow>>(new Map());
 
   const currentDow = monIndexToDbDow(monIdx);
   const currentRow = rowsByDow.get(currentDow) ?? (userId ? emptyRow(userId, currentDow) : null);
@@ -87,10 +97,14 @@ export function WorkoutSetupFlowView() {
     setUserId(user.id);
     const { data } = await supabase.from("weekly_workout_plan").select("*").eq("user_id", user.id);
     const map = new Map<number, WeeklyWorkoutPlanRow>();
+    const dbOnly = new Map<number, WeeklyWorkoutPlanRow>();
     for (const raw of (data ?? []) as WeeklyWorkoutPlanRow[]) {
       const dow = asDow(raw.day_of_week);
-      map.set(dow, { ...raw, day_of_week: dow });
+      const normalized = { ...raw, day_of_week: dow };
+      map.set(dow, normalized);
+      dbOnly.set(dow, normalized);
     }
+    dbRowsByDowRef.current = dbOnly;
     for (let i = 0; i < 7; i++) {
       const dow = monIndexToDbDow(i);
       if (!map.has(dow)) map.set(dow, emptyRow(user.id, dow));
@@ -131,12 +145,34 @@ export function WorkoutSetupFlowView() {
     setRowsByDow((prev) => {
       const merged = new Map(prev);
       const dowKey = asDow(row.day_of_week);
-      merged.set(dowKey, { ...row, day_of_week: dowKey });
+      const saved = { ...row, day_of_week: dowKey };
+      merged.set(dowKey, saved);
+      dbRowsByDowRef.current.set(dowKey, saved);
       const arr = Array.from(merged.values()).sort((a, b) => a.day_of_week - b.day_of_week);
       writeWeeklyPlanCache(userId, arr);
       return merged;
     });
     return true;
+  }
+
+  function skipThisDay() {
+    if (!userId) return;
+    const idx = monIdxRef.current;
+    const dow = monIndexToDbDow(idx);
+    const dbRow = dbRowsByDowRef.current.get(dow);
+    setRowsByDow((prev) => {
+      const next = new Map(prev);
+      if (dbRow) next.set(dow, { ...dbRow });
+      else next.set(dow, emptyRow(userId, dow));
+      return next;
+    });
+    setShowExerciseForm(false);
+    setEditingExId(null);
+    if (idx >= 6) setPhase("summary");
+    else {
+      setMonIdx(idx + 1);
+      setPhase("type");
+    }
   }
 
   function selectDayType(t: DayType) {
@@ -206,9 +242,11 @@ export function WorkoutSetupFlowView() {
     const merged = new Map(rowsByDowRef.current);
     for (let i = monIdxRef.current + 1; i < 7; i++) {
       const dow = monIndexToDbDow(i);
-      const base = merged.get(dow) ?? emptyRow(userId, dow);
+      const dbRow = dbRowsByDowRef.current.get(dow);
+      if (isDayConfiguredInDb(dbRow)) continue;
       const row: WeeklyWorkoutPlanRow = {
-        ...base,
+        user_id: userId,
+        day_of_week: dow,
         day_type: "workout",
         muscle_group: "",
         exercises: [],
@@ -220,7 +258,12 @@ export function WorkoutSetupFlowView() {
         return;
       }
       merged.set(dow, row);
+      dbRowsByDowRef.current.set(dow, row);
     }
+    const curDow = monIndexToDbDow(monIdxRef.current);
+    const curSnap = dbRowsByDowRef.current.get(curDow);
+    if (curSnap) merged.set(curDow, { ...curSnap });
+    else merged.set(curDow, emptyRow(userId, curDow));
     setRowsByDow(merged);
     writeWeeklyPlanCache(
       userId,
@@ -400,6 +443,9 @@ export function WorkoutSetupFlowView() {
                 <p className="mt-1 text-sm text-muted">Total recovery</p>
               </button>
             </div>
+            <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={skipThisDay}>
+              Skip this day
+            </Button>
             <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={() => void skipRemaining()}>
               Skip remaining days
             </Button>
@@ -437,6 +483,9 @@ export function WorkoutSetupFlowView() {
               onClick={() => setPhase("exercises")}
             >
               Continue
+            </Button>
+            <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={skipThisDay}>
+              Skip this day
             </Button>
             <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={() => void skipRemaining()}>
               Skip remaining days
@@ -535,6 +584,9 @@ export function WorkoutSetupFlowView() {
               <Button type="button" variant="secondary" className="min-h-[48px] w-full" disabled={busy} onClick={() => void finishWorkoutDay()}>
                 Finish Day
               </Button>
+              <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={skipThisDay}>
+                Skip this day
+              </Button>
               <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={() => void skipRemaining()}>
                 Skip remaining days
               </Button>
@@ -557,6 +609,9 @@ export function WorkoutSetupFlowView() {
             </Card>
             <Button type="button" className="min-h-[48px] w-full" disabled={busy} onClick={() => void finishRestDay()}>
               Confirm and continue
+            </Button>
+            <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={skipThisDay}>
+              Skip this day
             </Button>
             <Button type="button" variant="ghost" className="min-h-[48px] w-full text-muted" disabled={busy} onClick={() => void skipRemaining()}>
               Skip remaining days
