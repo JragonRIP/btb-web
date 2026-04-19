@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { format, subWeeks } from "date-fns";
 import { toast } from "sonner";
-import { LogOut, Moon, Monitor, Sun } from "lucide-react";
+import { LogOut, Mail, Moon, Monitor, Sun } from "lucide-react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import type { Profile } from "@/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -23,6 +23,13 @@ import {
   type WeeklySummaryStats,
 } from "@/components/summary/weekly-summary-modal";
 import { writeProfileCache } from "@/lib/btb-local-cache";
+
+const FEEDBACK_MAILTO =
+  "mailto:aurumautodetail906@gmail.com?" +
+  new URLSearchParams({
+    subject: "Build The Body — Feedback",
+    body: "App version: 1.0\n\n[User writes their message here]",
+  }).toString();
 
 export function SettingsView() {
   const { client: supabase } = useSupabaseBrowser();
@@ -205,6 +212,28 @@ export function SettingsView() {
                 <Button type="button" variant="secondary" className="min-h-[48px] w-full" onClick={() => void openLastSummary()}>
                   View last weekly summary
                 </Button>
+              </Card>
+            </section>
+
+            <section>
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Feedback</h2>
+              <Card className="overflow-hidden p-0">
+                <a
+                  href={FEEDBACK_MAILTO}
+                  className={cn(
+                    "flex min-h-[52px] items-center gap-3 px-4 py-3 text-left transition",
+                    "hover:bg-elevated/50 active:bg-elevated/70",
+                    "border border-transparent text-ink dark:text-white"
+                  )}
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-line/25 text-muted">
+                    <Mail className="h-5 w-5" aria-hidden />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium">Send feedback</span>
+                    <span className="mt-0.5 block text-sm text-muted">Report a bug or suggest a feature</span>
+                  </span>
+                </a>
               </Card>
             </section>
 
