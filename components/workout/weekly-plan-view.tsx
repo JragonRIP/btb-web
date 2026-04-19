@@ -130,7 +130,7 @@ export function WeeklyPlanView() {
       )}
       <header className="border-b border-line/80 bg-canvas/80 px-4 pb-4 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] backdrop-blur-md">
         <h1 className="font-display text-2xl font-semibold text-ink md:text-3xl">Workout</h1>
-        <p className="mt-1 text-sm text-muted">Pick a day, then train or recover.</p>
+        <p className="mt-1 text-sm text-muted">Pick a day, then train or recover. Use guided setup if you&apos;re new.</p>
       </header>
 
       <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 py-4">
@@ -163,10 +163,10 @@ export function WeeklyPlanView() {
           <div className="rounded-2xl border border-line bg-surface/60 p-8 text-center dark:bg-elevated/40">
             <p className="font-medium text-ink">No workout set — configure in Settings</p>
             <Link
-              href="/settings/weekly-workouts"
+              href="/workout/setup-flow"
               className="mt-6 inline-flex min-h-[48px] items-center justify-center rounded-xl bg-gold px-6 text-sm font-medium text-zinc-950 shadow-gold transition hover:brightness-110 dark:text-white"
             >
-              Edit weekly workouts
+              Set up your workouts
             </Link>
           </div>
         ) : (

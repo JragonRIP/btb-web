@@ -42,12 +42,19 @@ export type ActivityItem =
 /** DB: 0=Sun … 6=Sat */
 export type DayType = "workout" | "active_rest" | "full_rest";
 
+export type PlanExerciseType = "reps" | "timed";
+
 export interface PlanExercise {
   id: string;
   name: string;
   sets: number;
   reps: number;
   restSeconds: number;
+  /** Defaults to reps when absent (legacy rows). */
+  exerciseType?: PlanExerciseType;
+  toFailure?: boolean;
+  /** Per set duration in seconds when exerciseType is timed. */
+  durationSeconds?: number;
 }
 
 export interface Profile {

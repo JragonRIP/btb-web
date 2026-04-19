@@ -1,17 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import type { DayType, PlanExercise, WeeklyWorkoutPlanRow } from "@/types";
 import { recomputeStreaks } from "@/lib/streak";
+import { formatExerciseMetaLine, normalizePlanExercise } from "@/lib/plan-exercise";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { ActiveExerciseModal } from "@/components/workout/active-exercise-modal";
+import { PositiveIntInput } from "@/components/workout/positive-int-input";
 
 type LayoutMode = "page" | "embedded";
 
@@ -31,6 +34,7 @@ export function DayWorkoutPanel({
   const [restSec, setRestSec] = useState<Record<string, number>>({});
   const [timer, setTimer] = useState<{ exId: string; left: number } | null>(null);
   const [celebrate, setCelebrate] = useState(false);
+  const [modalEx, setModalEx] = useState<PlanExercise | null>(null);
 
   const exercises = useMemo(() => (plan?.exercises ?? []) as PlanExercise[], [plan]);
 
@@ -58,7 +62,7 @@ export function DayWorkoutPanel({
       .maybeSingle();
     setPlan((row ?? null) as WeeklyWorkoutPlanRow | null);
     const raw = (row?.exercises ?? []) as PlanExercise[];
-    const exs = raw.map((x, i) => (x.id ? x : { ...x, id: `ex-${dow}-${i}` }));
+    const exs = raw.map((x, i) => (x.id ? normalizePlanExercise(x) : normalizePlanExercise({ ...x, id: `ex-${dow}-${i}` })));
     const initRest: Record<string, number> = {};
     const initChk: Record<string, boolean> = {};
     for (const ex of exs) {
@@ -127,8 +131,17 @@ export function DayWorkoutPanel({
     await saveProgress(doneIds, true);
     await recomputeStreaks(supabase, user.id);
     setCelebrate(true);
-    setTimeout(() => setCelebrate(false), 2500);
+    setTimeout(() => setCelebrate(false), 3200);
     toast.success("Workout complete!");
+  }
+
+  async function handleModalExerciseComplete(ex: PlanExercise): Promise<void> {
+    const next = { ...checked, [ex.id]: true };
+    setChecked(next);
+    const doneIds = Object.entries(next).filter(([, v]) => v).map(([k]) => k);
+    await saveProgress(doneIds, false);
+    const allDone = exercises.length > 0 && exercises.every((e) => next[e.id]);
+    if (allDone) await completeWorkout();
   }
 
   const pageHeader =
@@ -185,65 +198,106 @@ export function DayWorkoutPanel({
   }
 
   return (
-    <div className={cn(celebrate && "animate-pulse")}>
+    <div>
       {pageHeader}
+      <ActiveExerciseModal
+        open={modalEx != null}
+        exercise={modalEx}
+        onClose={() => setModalEx(null)}
+        onExerciseComplete={(ex) => handleModalExerciseComplete(ex)}
+      />
       <div className="relative mx-auto max-w-3xl space-y-4 px-4 py-6">
         {celebrate && (
-          <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
-            <div className="rounded-2xl border border-gold bg-surface/95 px-8 py-6 font-display text-2xl font-bold text-gold shadow-gold">
-              Crushed it!
+          <div className="pointer-events-none fixed inset-0 z-[95] flex items-center justify-center overflow-hidden bg-black/50 backdrop-blur-sm">
+            {Array.from({ length: 22 }).map((_, i) => (
+              <span
+                key={i}
+                className="btb-confetti-piece absolute left-1/2 top-1/3 h-3 w-2 rounded-sm bg-gold shadow-gold"
+                style={
+                  {
+                    left: `${8 + (i * 37) % 86}%`,
+                    top: `${18 + (i % 5) * 8}%`,
+                    ["--tx" as string]: `${(i % 2 === 0 ? 1 : -1) * (30 + (i % 6) * 12)}px`,
+                    ["--ty" as string]: `${140 + (i % 9) * 18}px`,
+                    ["--rot" as string]: `${i * 33}deg`,
+                    animationDelay: `${i * 45}ms`,
+                  } as CSSProperties
+                }
+              />
+            ))}
+            <div className="relative z-10 rounded-2xl border border-gold bg-surface/95 px-10 py-8 text-center shadow-gold dark:bg-elevated/95">
+              <p className="font-display text-3xl font-bold text-gold">Workout Complete!</p>
+              <p className="mt-2 text-sm text-muted">Streak updates when nutrition goals are met too.</p>
             </div>
           </div>
         )}
         {!plan || exercises.length === 0 ? (
-          <Card className="p-6 text-sm text-muted">
-            No exercises for this day. Edit your weekly plan in Settings.
+          <Card className="space-y-4 p-6 text-sm text-muted">
+            <p>No exercises for this day.</p>
+            <Link
+              href="/workout/setup-flow"
+              className="inline-flex min-h-[48px] w-full items-center justify-center rounded-xl bg-gold px-4 text-center font-medium text-zinc-950 shadow-gold hover:brightness-110 dark:text-white"
+            >
+              Set up your week
+            </Link>
           </Card>
         ) : (
-          exercises.map((ex) => (
-            <Card key={ex.id} className="p-4">
-              <div className="flex items-start gap-3">
-                <button
-                  type="button"
-                  aria-label="Toggle complete"
-                  className={cn(
-                    "mt-1 flex h-11 w-11 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border-2 transition",
-                    checked[ex.id] ? "border-gold bg-gold/20 text-gold" : "border-line"
-                  )}
-                  onClick={() => void toggleEx(ex)}
-                >
-                  {checked[ex.id] ? "✓" : ""}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-ink">{ex.name}</p>
-                  <p className="text-sm text-muted">
-                    {ex.sets} × {ex.reps} · Rest {restSec[ex.id] ?? 60}s
-                  </p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Input
-                      type="number"
-                      className="h-11 min-h-[44px] w-24"
-                      value={restSec[ex.id] ?? 60}
-                      onChange={(e) =>
-                        setRestSec((s) => ({
-                          ...s,
-                          [ex.id]: Math.max(10, Number(e.target.value) || 60),
-                        }))
-                      }
-                    />
-                    <Button
+          exercises.map((ex) => {
+            const norm = normalizePlanExercise(ex);
+            return (
+              <Card key={ex.id} className="p-4">
+                <div className="flex items-start gap-3">
+                  <button
+                    type="button"
+                    aria-label="Toggle complete"
+                    className={cn(
+                      "mt-1 flex h-11 w-11 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border-2 transition",
+                      checked[ex.id] ? "border-gold bg-gold/20 text-gold" : "border-line"
+                    )}
+                    onClick={() => void toggleEx(ex)}
+                  >
+                    {checked[ex.id] ? "✓" : ""}
+                  </button>
+                  <div className="min-w-0 flex-1 space-y-3">
+                    <button
                       type="button"
-                      variant="secondary"
-                      className="min-h-[44px]"
-                      onClick={() => setTimer({ exId: ex.id, left: restSec[ex.id] ?? 60 })}
+                      className="w-full rounded-xl text-left transition hover:bg-elevated/50 dark:hover:bg-surface/40"
+                      disabled={checked[ex.id]}
+                      onClick={() => {
+                        if (checked[ex.id]) return;
+                        setModalEx(norm);
+                      }}
                     >
-                      Start rest timer
-                    </Button>
+                      <p className="font-semibold text-ink">{ex.name}</p>
+                      <p className="text-sm text-muted">{formatExerciseMetaLine(norm)}</p>
+                      {!checked[ex.id] ? <p className="mt-1 text-xs font-medium text-gold">Tap to train</p> : null}
+                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PositiveIntInput
+                        className="h-11 min-h-[44px] w-28"
+                        value={restSec[ex.id] ?? 60}
+                        min={1}
+                        onValueChange={(n) =>
+                          setRestSec((s) => ({
+                            ...s,
+                            [ex.id]: n,
+                          }))
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="min-h-[44px]"
+                        onClick={() => setTimer({ exId: ex.id, left: restSec[ex.id] ?? 60 })}
+                      >
+                        Start rest timer
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-          ))
+              </Card>
+            );
+          })
         )}
         {timer && (
           <div className="fixed bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-2xl border border-gold bg-surface px-8 py-6 shadow-gold dark:bg-elevated md:bottom-10">

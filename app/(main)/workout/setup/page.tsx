@@ -1,5 +1,6 @@
-import { WeeklyEditorView } from "@/components/workout/weekly-editor-view";
+import { redirect } from "next/navigation";
 
 export default function WorkoutSetupPage() {
-  return <WeeklyEditorView backHref="/home" />;
+  redirect("/workout/setup-flow");
 }
+

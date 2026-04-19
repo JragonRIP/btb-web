@@ -117,7 +117,7 @@ export function OnboardingFlow() {
         if (full) writeProfileCache(user.id, full as Profile);
       }
       toast.success("You're all set!");
-      router.push(goSetup ? "/workout/setup" : "/home");
+      router.push(goSetup ? "/workout/setup-flow" : "/home");
       router.refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not finish");
@@ -240,7 +240,7 @@ export function OnboardingFlow() {
           <p className="mt-1 text-sm text-muted">You can always change this later in Settings.</p>
           <div className="mt-8 flex flex-col gap-3">
             <Button type="button" className="min-h-[48px]" disabled={busy} onClick={() => void finish(true)}>
-              Set it up now
+              Set up your workouts now
             </Button>
             <Button type="button" variant="secondary" className="min-h-[48px]" disabled={busy} onClick={() => void finish(false)}>
               I&apos;ll do it later

@@ -185,10 +185,15 @@ export function SettingsView() {
 
             <section>
               <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Workouts</h2>
-              <Card className="p-4">
-                <Link href="/settings/weekly-workouts">
+              <Card className="space-y-3 p-4">
+                <Link href="/workout/setup-flow" className="block">
+                  <Button type="button" className="min-h-[48px] w-full">
+                    Set up workouts
+                  </Button>
+                </Link>
+                <Link href="/settings/weekly-workouts" className="block">
                   <Button type="button" variant="secondary" className="min-h-[48px] w-full">
-                    Edit weekly workouts
+                    Workout settings
                   </Button>
                 </Link>
               </Card>
