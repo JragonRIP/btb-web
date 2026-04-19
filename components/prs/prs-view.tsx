@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
@@ -12,7 +12,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Skeleton } from "@/components/ui/skeleton";
+import { readPrsBootstrap } from "@/lib/btb-client-hydrate";
+import { jsonSame } from "@/lib/btb-json-same";
+import { touchActiveUserId, writePrsCache, writeWeightLogsCache } from "@/lib/btb-local-cache";
 import { cn } from "@/lib/utils";
 
 function score(w: number | null, r: number | null) {
@@ -41,9 +43,19 @@ export function PrsView() {
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const b = readPrsBootstrap();
+    if (!b) return;
+    setPrs(b.prs);
+    setWeights(b.weights);
+    setLoading(false);
+  }, []);
+
   const load = useCallback(async () => {
-    if (!supabase) return;
-    setLoading(true);
+    if (!supabase) {
+      if (aliveRef.current) setLoading(false);
+      return;
+    }
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -51,14 +63,22 @@ export function PrsView() {
       if (aliveRef.current) setLoading(false);
       return;
     }
-    const [{ data: p }, { data: w }] = await Promise.all([
-      supabase.from("personal_records").select("*").eq("user_id", user.id).order("achieved_at", { ascending: false }),
-      supabase.from("weight_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(120),
-    ]);
-    if (!aliveRef.current) return;
-    setPrs((p ?? []) as PersonalRecord[]);
-    setWeights((w ?? []) as WeightLog[]);
-    setLoading(false);
+    touchActiveUserId(user.id);
+    try {
+      const [{ data: p }, { data: w }] = await Promise.all([
+        supabase.from("personal_records").select("*").eq("user_id", user.id).order("achieved_at", { ascending: false }),
+        supabase.from("weight_logs").select("*").eq("user_id", user.id).order("date", { ascending: false }).limit(120),
+      ]);
+      if (!aliveRef.current) return;
+      const nextP = (p ?? []) as PersonalRecord[];
+      const nextW = (w ?? []) as WeightLog[];
+      setPrs((prev) => (jsonSame(prev, nextP) ? prev : nextP));
+      setWeights((prev) => (jsonSame(prev, nextW) ? prev : nextW));
+      writePrsCache(user.id, nextP);
+      writeWeightLogsCache(user.id, nextW);
+    } finally {
+      if (aliveRef.current) setLoading(false);
+    }
   }, [supabase]);
 
   useEffect(() => {
@@ -126,8 +146,6 @@ export function PrsView() {
     return m;
   }, [prs]);
 
-  if (!supabase) return null;
-
   return (
     <div className="relative">
       {confettiOn && (
@@ -183,7 +201,7 @@ export function PrsView() {
               <Textarea value={note} onChange={(e) => setNote(e.target.value)} />
             </div>
             <div className="sm:col-span-2">
-              <Button type="submit" className="min-h-[48px]" disabled={saving}>
+              <Button type="submit" className="min-h-[48px]" disabled={saving || !supabase}>
                 {saving ? "Saving…" : "Save PR"}
               </Button>
             </div>
@@ -193,7 +211,7 @@ export function PrsView() {
         <Card className="p-4">
           <h2 className="font-display text-lg font-semibold text-ink">Current best by lift</h2>
           {loading ? (
-            <Skeleton className="mt-4 h-24" />
+            <p className="mt-4 text-sm text-muted">Loading…</p>
           ) : (
             <ul className="mt-4 space-y-2">
               {[...bestByExercise.entries()].map(([k, p]) => (
@@ -211,7 +229,7 @@ export function PrsView() {
 
         <Card className="p-4">
           <h2 className="font-display text-lg font-semibold text-ink">Weight history</h2>
-          {loading ? <Skeleton className="mt-4 h-56" /> : <WeightLogsChart rows={weights} />}
+          {loading ? <p className="mt-4 text-sm text-muted">Loading…</p> : <WeightLogsChart rows={weights} />}
         </Card>
 
         <Card className="p-4">

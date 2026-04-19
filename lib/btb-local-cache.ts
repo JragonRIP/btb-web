@@ -1,9 +1,36 @@
-import type { FoodLog, Profile, SleepLog, WeeklyWorkoutPlanRow } from "@/types";
+import type { FoodLog, PersonalRecord, Profile, SleepLog, WeeklyWorkoutPlanRow, WeightLog } from "@/types";
 
 export const BTB_PROFILE_TTL_MS = 60 * 60 * 1000;
-export const BTB_BOOT_SPINNER_MS = 1500;
 
 const NS = "btb";
+const ACTIVE_UID_KEY = `${NS}_active_uid`;
+
+export function touchActiveUserId(userId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(ACTIVE_UID_KEY, userId);
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function readActiveUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(ACTIVE_UID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearActiveUserId() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(ACTIVE_UID_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 export function profileCacheKey(userId: string) {
   return `${NS}_profile_${userId}`;
@@ -47,6 +74,7 @@ export function readProfileCache(userId: string): CachedEnvelope<Profile> | null
 
 export function writeProfileCache(userId: string, profile: Profile) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   const env: CachedEnvelope<Profile> = { v: profile, ts: Date.now() };
   localStorage.setItem(profileCacheKey(userId), JSON.stringify(env));
 }
@@ -62,6 +90,7 @@ export function readFoodTodayCache(userId: string, date: string): CachedEnvelope
 
 export function writeFoodTodayCache(userId: string, date: string, rows: FoodLog[]) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   localStorage.setItem(foodTodayCacheKey(userId, date), JSON.stringify({ v: rows, ts: Date.now() } satisfies CachedEnvelope<FoodLog[]>));
 }
 
@@ -72,6 +101,7 @@ export function readLastSleepCache(userId: string): CachedEnvelope<SleepLog | nu
 
 export function writeLastSleepCache(userId: string, log: SleepLog | null) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   localStorage.setItem(lastSleepCacheKey(userId), JSON.stringify({ v: log, ts: Date.now() } satisfies CachedEnvelope<SleepLog | null>));
 }
 
@@ -87,6 +117,7 @@ export function readWeekHomeCache(userId: string, weekStart: string): CachedEnve
 
 export function writeWeekHomeCache(userId: string, weekStart: string, payload: WeekHomePayload) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   localStorage.setItem(weekHomeCacheKey(userId, weekStart), JSON.stringify({ v: payload, ts: Date.now() }));
 }
 
@@ -97,6 +128,7 @@ export function readWeeklyPlanCache(userId: string): CachedEnvelope<WeeklyWorkou
 
 export function writeWeeklyPlanCache(userId: string, rows: WeeklyWorkoutPlanRow[]) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   localStorage.setItem(weeklyPlanCacheKey(userId), JSON.stringify({ v: rows, ts: Date.now() }));
 }
 
@@ -107,5 +139,36 @@ export function readSleepListCache(userId: string): CachedEnvelope<SleepLog[]> |
 
 export function writeSleepListCache(userId: string, rows: SleepLog[]) {
   if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
   localStorage.setItem(sleepListCacheKey(userId), JSON.stringify({ v: rows, ts: Date.now() }));
+}
+
+export function prsListCacheKey(userId: string) {
+  return `${NS}_prs_${userId}`;
+}
+
+export function weightLogsCacheKey(userId: string) {
+  return `${NS}_weights_${userId}`;
+}
+
+export function readPrsCache(userId: string): CachedEnvelope<PersonalRecord[]> | null {
+  if (typeof window === "undefined") return null;
+  return safeParse<PersonalRecord[]>(localStorage.getItem(prsListCacheKey(userId)));
+}
+
+export function writePrsCache(userId: string, rows: PersonalRecord[]) {
+  if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
+  localStorage.setItem(prsListCacheKey(userId), JSON.stringify({ v: rows, ts: Date.now() } satisfies CachedEnvelope<PersonalRecord[]>));
+}
+
+export function readWeightLogsCache(userId: string): CachedEnvelope<WeightLog[]> | null {
+  if (typeof window === "undefined") return null;
+  return safeParse<WeightLog[]>(localStorage.getItem(weightLogsCacheKey(userId)));
+}
+
+export function writeWeightLogsCache(userId: string, rows: WeightLog[]) {
+  if (typeof window === "undefined") return;
+  touchActiveUserId(userId);
+  localStorage.setItem(weightLogsCacheKey(userId), JSON.stringify({ v: rows, ts: Date.now() } satisfies CachedEnvelope<WeightLog[]>));
 }

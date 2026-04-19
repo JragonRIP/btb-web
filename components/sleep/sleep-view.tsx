@@ -14,13 +14,9 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/lib/motion";
-import {
-  BTB_BOOT_SPINNER_MS,
-  readProfileCache,
-  readSleepListCache,
-  writeProfileCache,
-  writeSleepListCache,
-} from "@/lib/btb-local-cache";
+import { readSleepBootstrap } from "@/lib/btb-client-hydrate";
+import { jsonSame } from "@/lib/btb-json-same";
+import { touchActiveUserId, writeProfileCache, writeSleepListCache } from "@/lib/btb-local-cache";
 
 const DOW_LETTER = ["S", "M", "T", "W", "T", "F", "S"] as const;
 
@@ -50,7 +46,6 @@ export function SleepView() {
   const [qualityOpen, setQualityOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const logCardRef = useRef<HTMLDivElement>(null);
-  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seededForm = useRef(false);
   const aliveRef = useRef(true);
   const [sleepBarsKey, setSleepBarsKey] = useState(0);
@@ -69,11 +64,17 @@ export function SleepView() {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
     };
+  }, []);
+
+  useLayoutEffect(() => {
+    const snap = readSleepBootstrap();
+    if (!snap) return;
+    setProfile(snap.profile);
+    setRows(snap.rows);
+    setBlockingSpinner(false);
+    setDataBootstrapped(true);
+    setAnimReady(true);
   }, []);
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
@@ -139,18 +140,7 @@ export function SleepView() {
       return;
     }
 
-    const pCached = readProfileCache(user.id);
-    const sCached = readSleepListCache(user.id);
-    if (pCached?.v) setProfile(pCached.v);
-    if (sCached?.v?.length) setRows(sCached.v);
-
-    const hadCache = Boolean(pCached?.v) || Boolean(sCached?.v?.length);
-    if (hadCache) setBlockingSpinner(false);
-    else {
-      setBlockingSpinner(true);
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
-    }
+    touchActiveUserId(user.id);
 
     try {
       const [{ data: prof, error: pe }, { data, error: sleepErr }] = await Promise.all([
@@ -163,20 +153,16 @@ export function SleepView() {
 
       if (prof) {
         const pr = prof as Profile;
-        setProfile(pr);
+        setProfile((prev) => (jsonSame(prev, pr) ? prev : pr));
         writeProfileCache(user.id, pr);
       }
       const list = (data ?? []) as SleepLog[];
-      setRows(list);
+      setRows((prev) => (jsonSame(prev, list) ? prev : list));
       writeSleepListCache(user.id, list);
       setOffline(false);
     } catch {
       if (aliveRef.current) setOffline(true);
     } finally {
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
       if (aliveRef.current) {
         setBlockingSpinner(false);
         setDataBootstrapped(true);
@@ -189,7 +175,13 @@ export function SleepView() {
   }, [refreshRemote, supabase]);
 
   useEffect(() => {
-    if (!dataBootstrapped || blockingSpinner) return;
+    if (supabase) return;
+    setBlockingSpinner(false);
+    setDataBootstrapped(true);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!dataBootstrapped || blockingSpinner || animReady) return;
     let cancelled = false;
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -200,7 +192,7 @@ export function SleepView() {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [dataBootstrapped, blockingSpinner]);
+  }, [dataBootstrapped, blockingSpinner, animReady]);
 
   useEffect(() => {
     if (!animReady || sleepBarsPrimed.current) return;
@@ -313,15 +305,7 @@ export function SleepView() {
     );
   }
 
-  if (!supabase) {
-    return (
-      <div className={cn("px-4 pb-10 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]")}>
-        <p className="text-muted">Loading…</p>
-      </div>
-    );
-  }
-
-  if (blockingSpinner && rows.length === 0 && !profile) {
+  if (blockingSpinner && readSleepBootstrap() == null) {
     return (
       <div className="flex min-h-[40vh] flex-col items-center justify-center px-4 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)]">
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" aria-hidden />
@@ -427,7 +411,7 @@ export function SleepView() {
           <Button
             type="submit"
             className="mt-6 min-h-[48px] w-full rounded-xl bg-gold text-zinc-950 shadow-none ring-0 hover:brightness-[1.03] hover:shadow-none active:scale-100 dark:text-white"
-            disabled={saving}
+            disabled={saving || !supabase}
           >
             {saving ? "Saving…" : "Save sleep"}
           </Button>
@@ -500,7 +484,13 @@ export function SleepView() {
                 </p>
                 {r.notes && <p className="mt-1 text-sm text-muted">{r.notes}</p>}
               </button>
-              <Button variant="ghost" type="button" className="min-h-[44px] self-start text-red-600" onClick={() => void removeRow(r.id)}>
+              <Button
+                variant="ghost"
+                type="button"
+                className="min-h-[44px] self-start text-red-600"
+                disabled={!supabase}
+                onClick={() => void removeRow(r.id)}
+              >
                 Delete
               </Button>
             </li>

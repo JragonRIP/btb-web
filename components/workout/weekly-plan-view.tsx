@@ -8,6 +8,8 @@ import type { DayType, WeeklyWorkoutPlanRow } from "@/types";
 import { cn } from "@/lib/utils";
 import { MON_FIRST_DB_DOW, dateForDbDayOfWeek } from "@/lib/week-dates";
 import { DayWorkoutPanel } from "@/components/workout/day-workout-panel";
+import { readWeeklyPlanBootstrap } from "@/lib/btb-client-hydrate";
+import { jsonSame } from "@/lib/btb-json-same";
 import { readWeeklyPlanCache, writeWeeklyPlanCache } from "@/lib/btb-local-cache";
 
 const PILL_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -32,6 +34,14 @@ export function WeeklyPlanView() {
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const snap = readWeeklyPlanBootstrap();
+    if (snap == null) return;
+    setRows(snap);
+    setPlanDataReady(true);
+    setAnimReady(true);
+  }, []);
+
   const load = useCallback(async () => {
     if (!supabase) return;
     const {
@@ -42,8 +52,8 @@ export function WeeklyPlanView() {
       return;
     }
     const cached = readWeeklyPlanCache(user.id);
-    if (cached?.v?.length) {
-      setRows(cached.v);
+    if (cached?.v) {
+      setRows((prev) => (jsonSame(prev, cached.v) ? prev : cached.v));
       setOffline(false);
     }
     try {
@@ -55,12 +65,12 @@ export function WeeklyPlanView() {
       if (error) throw error;
       if (!aliveRef.current) return;
       const next = (data ?? []) as WeeklyWorkoutPlanRow[];
-      setRows(next);
+      setRows((prev) => (jsonSame(prev, next) ? prev : next));
       writeWeeklyPlanCache(user.id, next);
       setOffline(false);
     } catch {
       if (!aliveRef.current) return;
-      if (!cached?.v?.length) setRows([]);
+      if (!cached?.v) setRows([]);
       setOffline(true);
     } finally {
       if (aliveRef.current) setPlanDataReady(true);
@@ -72,7 +82,12 @@ export function WeeklyPlanView() {
   }, [load]);
 
   useEffect(() => {
-    if (!planDataReady) return;
+    if (supabase) return;
+    if (aliveRef.current) setPlanDataReady(true);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!planDataReady || animReady) return;
     let cancelled = false;
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -83,7 +98,7 @@ export function WeeklyPlanView() {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [planDataReady]);
+  }, [planDataReady, animReady]);
 
   useEffect(() => {
     if (!animReady || pillMotionApplied.current) return;
@@ -105,7 +120,6 @@ export function WeeklyPlanView() {
     Boolean(row) && (dayType !== "workout" || (Array.isArray(exercises) && exercises.length > 0));
 
   if (envError) return <p className="p-6 text-sm text-red-600">{envError}</p>;
-  if (!supabase) return <p className="p-6 text-muted">Loading…</p>;
 
   return (
     <div className="relative">

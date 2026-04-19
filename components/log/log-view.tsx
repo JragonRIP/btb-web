@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
@@ -11,16 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/lib/motion";
-import {
-  BTB_BOOT_SPINNER_MS,
-  readFoodTodayCache,
-  readProfileCache,
-  writeFoodTodayCache,
-  writeProfileCache,
-} from "@/lib/btb-local-cache";
+import { readLogBootstrap } from "@/lib/btb-client-hydrate";
+import { jsonSame } from "@/lib/btb-json-same";
+import { touchActiveUserId, writeFoodTodayCache, writeProfileCache } from "@/lib/btb-local-cache";
 
 function FoodLogRow({
   row,
@@ -74,7 +69,6 @@ export function LogView() {
   const [cal, setCal] = useState("");
   const [prot, setProt] = useState("");
   const [saving, setSaving] = useState(false);
-  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
   const [macroIntro, setMacroIntro] = useState(false);
   const macroIntroPlayed = useRef(false);
@@ -92,14 +86,20 @@ export function LogView() {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
     };
   }, []);
 
   const today = format(new Date(), "yyyy-MM-dd");
+
+  useLayoutEffect(() => {
+    const snap = readLogBootstrap();
+    if (!snap) return;
+    setProfile(snap.profile);
+    setRows(snap.rows);
+    setBlockingSpinner(false);
+    setDataBootstrapped(true);
+    setAnimReady(true);
+  }, [today]);
 
   const refreshRemote = useCallback(async () => {
     if (!supabase) return;
@@ -114,19 +114,7 @@ export function LogView() {
       return;
     }
 
-    const pCached = readProfileCache(user.id);
-    const fCached = readFoodTodayCache(user.id, today);
-
-    if (pCached?.v) setProfile(pCached.v);
-    if (fCached?.v) setRows(fCached.v);
-
-    const hadProfileCache = Boolean(pCached?.v);
-    if (hadProfileCache) setBlockingSpinner(false);
-    else {
-      setBlockingSpinner(true);
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
-    }
+    touchActiveUserId(user.id);
 
     try {
       const [{ data: p, error: pe }, { data: f, error: fe }] = await Promise.all([
@@ -144,20 +132,16 @@ export function LogView() {
 
       if (p) {
         const pr = p as Profile;
-        setProfile(pr);
+        setProfile((prev) => (jsonSame(prev, pr) ? prev : pr));
         writeProfileCache(user.id, pr);
       }
       const list = (f ?? []) as FoodLog[];
-      setRows(list);
+      setRows((prev) => (jsonSame(prev, list) ? prev : list));
       writeFoodTodayCache(user.id, today, list);
       setOffline(false);
     } catch {
       if (aliveRef.current) setOffline(true);
     } finally {
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
       if (aliveRef.current) {
         setBlockingSpinner(false);
         setDataBootstrapped(true);
@@ -170,7 +154,13 @@ export function LogView() {
   }, [refreshRemote, supabase]);
 
   useEffect(() => {
-    if (!dataBootstrapped || blockingSpinner) return;
+    if (supabase) return;
+    setBlockingSpinner(false);
+    setDataBootstrapped(true);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!dataBootstrapped || blockingSpinner || animReady) return;
     let cancelled = false;
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -181,7 +171,7 @@ export function LogView() {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [dataBootstrapped, blockingSpinner]);
+  }, [dataBootstrapped, blockingSpinner, animReady]);
 
   useEffect(() => {
     if (!animReady || macroIntroPlayed.current) return;
@@ -337,16 +327,7 @@ export function LogView() {
     );
   }
 
-  if (!supabase) {
-    return (
-      <div>
-        <PageHeader title="Log" subtitle="Food & nutrition" />
-        <Skeleton className="m-4 h-40" />
-      </div>
-    );
-  }
-
-  if (blockingSpinner && !profile) {
+  if (blockingSpinner && readLogBootstrap() == null) {
     return (
       <div>
         <PageHeader title="Log" subtitle="Food & nutrition" />
@@ -423,7 +404,7 @@ export function LogView() {
               <Input type="number" className="min-h-[48px]" value={prot} onChange={(e) => setProt(e.target.value)} />
             </div>
             <div className="sm:col-span-2">
-              <Button type="submit" className="min-h-[48px] w-full sm:w-auto" disabled={saving}>
+              <Button type="submit" className="min-h-[48px] w-full sm:w-auto" disabled={saving || !supabase}>
                 {saving ? "Adding…" : "Add entry"}
               </Button>
             </div>

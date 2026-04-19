@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { addDays, format, parseISO, startOfWeek, subWeeks, isFriday } from "date-fns";
 import { Settings2, Zap } from "lucide-react";
@@ -11,19 +11,16 @@ import { RingProgress } from "@/components/ui/ring-progress";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { readHomeBootstrap } from "@/lib/btb-client-hydrate";
+import { jsonSame } from "@/lib/btb-json-same";
 import {
   WeeklySummaryModal,
   buildWeeklySummaryStats,
   type WeeklySummaryStats,
 } from "@/components/summary/weekly-summary-modal";
 import {
-  BTB_BOOT_SPINNER_MS,
-  readFoodTodayCache,
-  readLastSleepCache,
-  readProfileCache,
-  readWeekHomeCache,
+  touchActiveUserId,
   writeFoodTodayCache,
   writeLastSleepCache,
   writeProfileCache,
@@ -54,7 +51,6 @@ export function HomeView() {
   const [bootstrapped, setBootstrapped] = useState(false);
   const touchRef = useRef<{ x: number } | null>(null);
   const summaryFired = useRef(false);
-  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
   const [animReady, setAnimReady] = useState(false);
   const [ringIntroKey, setRingIntroKey] = useState(0);
@@ -64,12 +60,21 @@ export function HomeView() {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const snap = readHomeBootstrap(weekOffset);
+    if (!snap) return;
+    setProfile(snap.profile);
+    setFoodToday(snap.foodToday);
+    setLastSleep(snap.lastSleep);
+    setWeekFood(snap.weekFood);
+    setWeekWorkouts(snap.weekWorkouts);
+    setBlockingSpinner(false);
+    setBootstrapped(true);
+    setAnimReady(true);
+  }, [weekOffset]);
 
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const isFri = isFriday(new Date());
@@ -98,30 +103,11 @@ export function HomeView() {
       return;
     }
 
+    touchActiveUserId(user.id);
+
     const anchor = subWeeks(startOfWeek(new Date(), { weekStartsOn: 1 }), weekOffset);
     const wkStart = format(anchor, "yyyy-MM-dd");
     const wkEnd = format(addDays(anchor, 7), "yyyy-MM-dd");
-
-    const pCached = readProfileCache(user.id);
-    const fCached = readFoodTodayCache(user.id, todayStr);
-    const sCached = readLastSleepCache(user.id);
-    const wCached = readWeekHomeCache(user.id, wkStart);
-
-    if (pCached?.v) setProfile(pCached.v);
-    if (fCached?.v) setFoodToday(fCached.v);
-    if (sCached) setLastSleep(sCached.v);
-    if (wCached?.v) {
-      setWeekFood(wCached.v.food);
-      setWeekWorkouts(wCached.v.workouts);
-    }
-
-    const hadProfileCache = Boolean(pCached?.v);
-    if (hadProfileCache) setBlockingSpinner(false);
-    else {
-      setBlockingSpinner(true);
-      if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current);
-      spinnerTimerRef.current = setTimeout(() => setBlockingSpinner(false), BTB_BOOT_SPINNER_MS);
-    }
 
     try {
       const [{ data: prof }, { data: ft }, { data: sl }, { data: wf }, { data: ww }] = await Promise.all([
@@ -141,7 +127,7 @@ export function HomeView() {
 
       const pRow = (prof ?? null) as Profile | null;
       if (pRow) {
-        setProfile(pRow);
+        setProfile((prev) => (jsonSame(prev, pRow) ? prev : pRow));
         writeProfileCache(user.id, pRow);
       }
 
@@ -150,10 +136,10 @@ export function HomeView() {
       const wfRows = (wf ?? []) as FoodLog[];
       const wwRows = (ww ?? []) as { date: string; completed: boolean }[];
 
-      setFoodToday(food);
-      setLastSleep(sleepRow);
-      setWeekFood(wfRows);
-      setWeekWorkouts(wwRows);
+      setFoodToday((prev) => (jsonSame(prev, food) ? prev : food));
+      setLastSleep((prev) => (jsonSame(prev, sleepRow) ? prev : sleepRow));
+      setWeekFood((prev) => (jsonSame(prev, wfRows) ? prev : wfRows));
+      setWeekWorkouts((prev) => (jsonSame(prev, wwRows) ? prev : wwRows));
 
       writeFoodTodayCache(user.id, todayStr, food);
       writeLastSleepCache(user.id, sleepRow);
@@ -163,10 +149,6 @@ export function HomeView() {
     } catch {
       if (aliveRef.current) setOffline(true);
     } finally {
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
       if (aliveRef.current) {
         setBlockingSpinner(false);
         setBootstrapped(true);
@@ -178,9 +160,15 @@ export function HomeView() {
     if (supabase) void refreshRemote();
   }, [refreshRemote, supabase]);
 
-  /** After first remote refresh settles, wait two frames so content is painted before motion. */
   useEffect(() => {
-    if (!bootstrapped || blockingSpinner) return;
+    if (supabase) return;
+    setBlockingSpinner(false);
+    setBootstrapped(true);
+  }, [supabase]);
+
+  /** After first remote refresh (no cache path), wait two frames before motion. Cached path sets animReady in layout. */
+  useEffect(() => {
+    if (!bootstrapped || blockingSpinner || animReady) return;
     let cancelled = false;
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -191,7 +179,7 @@ export function HomeView() {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [bootstrapped, blockingSpinner]);
+  }, [bootstrapped, blockingSpinner, animReady]);
 
   const ringIntroApplied = useRef(false);
   useEffect(() => {
@@ -342,16 +330,7 @@ export function HomeView() {
     );
   }
 
-  if (!supabase) {
-    return (
-      <div className={cn("space-y-4 px-4 pb-8", safeTop)}>
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-40 w-full" />
-      </div>
-    );
-  }
-
-  if (blockingSpinner && !profile) {
+  if (blockingSpinner && readHomeBootstrap(weekOffset) == null) {
     return (
       <div className={cn("flex min-h-[50vh] flex-col items-center justify-center px-4", safeTop)}>
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-gold border-t-transparent" aria-hidden />
@@ -407,7 +386,12 @@ export function HomeView() {
               value={fridayWeight}
               onChange={(e) => setFridayWeight(e.target.value)}
             />
-            <Button type="button" className="min-h-[48px]" onClick={() => void submitFridayWeight()}>
+            <Button
+              type="button"
+              className="min-h-[48px]"
+              disabled={!supabase}
+              onClick={() => void submitFridayWeight()}
+            >
               Log
             </Button>
             <Button type="button" variant="ghost" className="min-h-[48px]" onClick={() => void dismissFriday()}>

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
-import { readProfileCache } from "@/lib/btb-local-cache";
+import { clearActiveUserId, readActiveUserId, readProfileCache, touchActiveUserId } from "@/lib/btb-local-cache";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -12,19 +12,32 @@ import { Skeleton } from "@/components/ui/skeleton";
  * Onboarding status is fetched once per session (plus sync from localStorage cache),
  * not on every pathname change, so tab switches stay instant.
  */
+/** `true` / `false` from profile cache, or `null` if unknown — same as gate ref seed. */
+function cachedOnboardingDone(): boolean | null {
+  if (typeof window === "undefined") return null;
+  const uid = readActiveUserId();
+  if (!uid) return null;
+  const c = readProfileCache(uid);
+  if (!c?.v || typeof c.v.onboarding_completed !== "boolean") return null;
+  return c.v.onboarding_completed;
+}
+
 export function ProfileGate({ children }: { children: React.ReactNode }) {
   const { client: supabase, error: envError } = useSupabaseBrowser();
   const pathname = usePathname();
   const router = useRouter();
-  const [ready, setReady] = useState(false);
-  const onboardingDoneRef = useRef<boolean | null>(null);
+  const onboardingDoneRef = useRef<boolean | null>(cachedOnboardingDone());
+  const [ready, setReady] = useState(() => cachedOnboardingDone() !== null);
 
   useEffect(() => {
     if (!supabase) return;
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") onboardingDoneRef.current = null;
+      if (event === "SIGNED_OUT") {
+        onboardingDoneRef.current = null;
+        clearActiveUserId();
+      }
     });
     return () => subscription.unsubscribe();
   }, [supabase]);
@@ -46,6 +59,8 @@ export function ProfileGate({ children }: { children: React.ReactNode }) {
         setReady(true);
         return;
       }
+
+      touchActiveUserId(user.id);
 
       const fromCache = readProfileCache(user.id);
       if (fromCache?.v && typeof fromCache.v.onboarding_completed === "boolean") {
