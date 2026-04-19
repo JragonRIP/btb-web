@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import { format, parseISO, startOfDay, subDays } from "date-fns";
 import { toast } from "sonner";
@@ -38,6 +38,8 @@ export function SleepView() {
   const [rows, setRows] = useState<SleepLog[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [blockingSpinner, setBlockingSpinner] = useState(true);
+  const [dataBootstrapped, setDataBootstrapped] = useState(false);
+  const [animReady, setAnimReady] = useState(false);
   const [offline, setOffline] = useState(false);
   const [date, setDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const [bedtime, setBedtime] = useState("22:30");
@@ -52,11 +54,15 @@ export function SleepView() {
   const seededForm = useRef(false);
   const aliveRef = useRef(true);
   const [sleepBarsKey, setSleepBarsKey] = useState(0);
-  const sleepBarsFired = useRef(false);
+  const sleepBarsPrimed = useRef(false);
   const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
     setReducedMotion(prefersReducedMotion());
+  }, []);
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
   }, []);
 
   useEffect(() => {
@@ -95,7 +101,8 @@ export function SleepView() {
   );
 
   const openDay = useCallback(
-    (d: Date) => {
+    (d: Date, opts?: { scroll?: boolean }) => {
+      const scroll = opts?.scroll !== false;
       const ds = format(d, "yyyy-MM-dd");
       setDate(ds);
       const hit = rows.find((r) => r.date === ds);
@@ -112,7 +119,9 @@ export function SleepView() {
         setQuality("4");
         setNotes("");
       }
-      requestAnimationFrame(() => logCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      if (scroll) {
+        requestAnimationFrame(() => logCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
     },
     [rows]
   );
@@ -123,7 +132,10 @@ export function SleepView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      if (aliveRef.current) setBlockingSpinner(false);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setDataBootstrapped(true);
+      }
       return;
     }
 
@@ -165,7 +177,10 @@ export function SleepView() {
         clearTimeout(spinnerTimerRef.current);
         spinnerTimerRef.current = null;
       }
-      if (aliveRef.current) setBlockingSpinner(false);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setDataBootstrapped(true);
+      }
     }
   }, [supabase]);
 
@@ -174,17 +189,30 @@ export function SleepView() {
   }, [refreshRemote, supabase]);
 
   useEffect(() => {
-    if (sleepBarsFired.current) return;
-    if (blockingSpinner && rows.length === 0 && !profile) return;
-    sleepBarsFired.current = true;
+    if (!dataBootstrapped || blockingSpinner) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setAnimReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [dataBootstrapped, blockingSpinner]);
+
+  useEffect(() => {
+    if (!animReady || sleepBarsPrimed.current) return;
+    sleepBarsPrimed.current = true;
     const id = requestAnimationFrame(() => setSleepBarsKey(1));
     return () => cancelAnimationFrame(id);
-  }, [blockingSpinner, rows.length, profile]);
+  }, [animReady]);
 
   useEffect(() => {
     if (!rows.length || seededForm.current) return;
     seededForm.current = true;
-    openDay(new Date());
+    openDay(new Date(), { scroll: false });
   }, [rows, openDay]);
 
   async function onSubmit(e: React.FormEvent) {
@@ -433,7 +461,7 @@ export function SleepView() {
                     className={cn(
                       "w-full rounded-t-2xl",
                       fillClass,
-                      logged && sleepBarsKey > 0 && !reducedMotion && "btb-sleep-bar-fill"
+                      animReady && logged && sleepBarsKey > 0 && !reducedMotion && "btb-sleep-bar-fill"
                     )}
                     style={
                       {

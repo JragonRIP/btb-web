@@ -67,6 +67,8 @@ export function LogView() {
   const [rows, setRows] = useState<FoodLog[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [blockingSpinner, setBlockingSpinner] = useState(true);
+  const [dataBootstrapped, setDataBootstrapped] = useState(false);
+  const [animReady, setAnimReady] = useState(false);
   const [offline, setOffline] = useState(false);
   const [name, setName] = useState("");
   const [cal, setCal] = useState("");
@@ -74,7 +76,7 @@ export function LogView() {
   const [saving, setSaving] = useState(false);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
-  const [macroIntro, setMacroIntro] = useState(true);
+  const [macroIntro, setMacroIntro] = useState(false);
   const macroIntroPlayed = useRef(false);
   const [enterIds, setEnterIds] = useState<Record<string, boolean>>({});
   const [exitingId, setExitingId] = useState<string | null>(null);
@@ -97,21 +99,6 @@ export function LogView() {
     };
   }, []);
 
-  useEffect(() => {
-    if (blockingSpinner || !profile || macroIntroPlayed.current) return;
-    macroIntroPlayed.current = true;
-    const t = setTimeout(() => setMacroIntro(false), 900);
-    return () => clearTimeout(t);
-  }, [blockingSpinner, profile]);
-
-  useEffect(() => {
-    if (blockingSpinner || !profile) return;
-    const t = setTimeout(() => {
-      listAnimReady.current = true;
-    }, 500);
-    return () => clearTimeout(t);
-  }, [blockingSpinner, profile]);
-
   const today = format(new Date(), "yyyy-MM-dd");
 
   const refreshRemote = useCallback(async () => {
@@ -120,7 +107,10 @@ export function LogView() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
-      if (aliveRef.current) setBlockingSpinner(false);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setDataBootstrapped(true);
+      }
       return;
     }
 
@@ -168,13 +158,46 @@ export function LogView() {
         clearTimeout(spinnerTimerRef.current);
         spinnerTimerRef.current = null;
       }
-      if (aliveRef.current) setBlockingSpinner(false);
+      if (aliveRef.current) {
+        setBlockingSpinner(false);
+        setDataBootstrapped(true);
+      }
     }
   }, [supabase, today]);
 
   useEffect(() => {
     if (supabase) void refreshRemote();
   }, [refreshRemote, supabase]);
+
+  useEffect(() => {
+    if (!dataBootstrapped || blockingSpinner) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setAnimReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [dataBootstrapped, blockingSpinner]);
+
+  useEffect(() => {
+    if (!animReady || macroIntroPlayed.current) return;
+    macroIntroPlayed.current = true;
+    setMacroIntro(true);
+    const t = setTimeout(() => setMacroIntro(false), 900);
+    return () => clearTimeout(t);
+  }, [animReady]);
+
+  useEffect(() => {
+    if (!animReady) return;
+    const t = setTimeout(() => {
+      listAnimReady.current = true;
+    }, 500);
+    return () => clearTimeout(t);
+  }, [animReady]);
 
   const totals = useMemo(() => {
     const c = rows.reduce((a, r) => a + r.calories, 0);
@@ -355,8 +378,9 @@ export function LogView() {
               <div
                 className={cn(
                   "absolute inset-y-0 left-0 h-full rounded-full bg-gold",
-                  macroIntro && !reducedMotion && "btb-log-macro-fill",
-                  (!macroIntro || reducedMotion) && "motion-reduce:transition-none transition-[width] duration-500 ease-out"
+                  animReady && macroIntro && !reducedMotion && "btb-log-macro-fill",
+                  (!animReady || !macroIntro || reducedMotion) &&
+                    "motion-reduce:transition-none transition-[width] duration-500 ease-out"
                 )}
                 style={{ width: `${calPct}%` }}
               />
@@ -373,8 +397,9 @@ export function LogView() {
               <div
                 className={cn(
                   "absolute inset-y-0 left-0 h-full rounded-full bg-gold",
-                  macroIntro && !reducedMotion && "btb-log-macro-fill",
-                  (!macroIntro || reducedMotion) && "motion-reduce:transition-none transition-[width] duration-500 ease-out"
+                  animReady && macroIntro && !reducedMotion && "btb-log-macro-fill",
+                  (!animReady || !macroIntro || reducedMotion) &&
+                    "motion-reduce:transition-none transition-[width] duration-500 ease-out"
                 )}
                 style={{ width: `${protPct}%` }}
               />

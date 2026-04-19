@@ -14,30 +14,69 @@ const items = [
   { href: "/prs", label: "PRs", icon: Trophy },
 ] as const;
 
+type PillGeom = { left: number; top: number; width: number; height: number };
+
+function measurePill(row: HTMLDivElement, link: HTMLAnchorElement): PillGeom | null {
+  const target = link.querySelector<HTMLElement>("[data-nav-pill-target]");
+  if (!target) return null;
+  const rr = row.getBoundingClientRect();
+  const tr = target.getBoundingClientRect();
+  return {
+    left: tr.left - rr.left,
+    top: tr.top - rr.top,
+    width: tr.width,
+    height: tr.height,
+  };
+}
+
 function MobileBottomNavInner() {
   const pathname = usePathname();
   const rowRef = useRef<HTMLDivElement>(null);
   const linkRefs = useRef<(HTMLAnchorElement | null)[]>([]);
-  const [pill, setPill] = useState({ left: 0, width: 0, height: 0, top: 0, ready: false });
+  const [pill, setPill] = useState<PillGeom | null>(null);
+  const [pillTransition, setPillTransition] = useState(false);
+  const prevActiveIndexRef = useRef<number | null>(null);
 
   const activeIndex = useMemo(() => {
-    return items.findIndex(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+    const i = items.findIndex(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+    return i >= 0 ? i : 0;
   }, [pathname]);
 
   useLayoutEffect(() => {
     const row = rowRef.current;
-    const link = linkRefs.current[activeIndex];
+    const idx = activeIndex;
+    const link = linkRefs.current[idx];
     if (!row || !link) return;
-    const target = link.querySelector<HTMLElement>("[data-nav-pill-target]");
-    if (!target) return;
-    const rr = row.getBoundingClientRect();
-    const tr = target.getBoundingClientRect();
-    setPill({
-      left: tr.left - rr.left,
-      width: tr.width,
-      height: tr.height,
-      top: tr.top - rr.top,
-      ready: true,
+
+    const next = measurePill(row, link);
+    if (!next) return;
+
+    if (prevActiveIndexRef.current === null) {
+      setPill(next);
+      setPillTransition(false);
+      prevActiveIndexRef.current = idx;
+      return;
+    }
+
+    if (prevActiveIndexRef.current === idx) {
+      setPillTransition(false);
+      setPill(next);
+      return;
+    }
+
+    const prevIdx = prevActiveIndexRef.current;
+    const prevLink = linkRefs.current[prevIdx];
+    const oldGeom = prevLink ? measurePill(row, prevLink) : next;
+    prevActiveIndexRef.current = idx;
+
+    setPillTransition(false);
+    setPill(oldGeom);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setPillTransition(true);
+        setPill(next);
+      });
     });
   }, [activeIndex, pathname]);
 
@@ -82,19 +121,21 @@ function MobileBottomNavInner() {
       aria-label="Primary"
     >
       <div ref={rowRef} className="relative mx-auto flex max-w-lg items-stretch justify-between px-1">
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute rounded-xl border border-gold/40 bg-gold/10 transition-[left,top,width,height] duration-300 ease-out motion-reduce:transition-none",
-            !pill.ready && "opacity-0"
-          )}
-          style={{
-            left: pill.left,
-            top: pill.top,
-            width: pill.width,
-            height: pill.height,
-          }}
-        />
+        {pill && (
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute rounded-xl border border-gold/40 bg-gold/10 motion-reduce:transition-none",
+              pillTransition && "transition-[left,top,width,height] duration-300 ease-out"
+            )}
+            style={{
+              left: pill.left,
+              top: pill.top,
+              width: pill.width,
+              height: pill.height,
+            }}
+          />
+        )}
         {links}
       </div>
     </nav>

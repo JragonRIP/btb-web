@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { addDays, format, parseISO, startOfWeek, subWeeks, isFriday } from "date-fns";
 import { Settings2, Zap } from "lucide-react";
@@ -56,8 +56,9 @@ export function HomeView() {
   const summaryFired = useRef(false);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
-  const dashIntroFired = useRef(false);
+  const [animReady, setAnimReady] = useState(false);
   const [ringIntroKey, setRingIntroKey] = useState(0);
+  const [weekBarSeq, setWeekBarSeq] = useState(0);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -177,11 +178,46 @@ export function HomeView() {
     if (supabase) void refreshRemote();
   }, [refreshRemote, supabase]);
 
-  useLayoutEffect(() => {
-    if (blockingSpinner || !profile || dashIntroFired.current) return;
-    dashIntroFired.current = true;
+  /** After first remote refresh settles, wait two frames so content is painted before motion. */
+  useEffect(() => {
+    if (!bootstrapped || blockingSpinner) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setAnimReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [bootstrapped, blockingSpinner]);
+
+  const ringIntroApplied = useRef(false);
+  useEffect(() => {
+    if (!animReady || ringIntroApplied.current) return;
+    ringIntroApplied.current = true;
     setRingIntroKey(1);
-  }, [blockingSpinner, profile]);
+  }, [animReady]);
+
+  const weekBarInitial = useRef(false);
+  useEffect(() => {
+    if (!animReady || weekBarInitial.current) return;
+    weekBarInitial.current = true;
+    setWeekBarSeq(1);
+  }, [animReady]);
+
+  const prevWeekOffset = useRef<number | null>(null);
+  useEffect(() => {
+    if (!animReady) return;
+    if (prevWeekOffset.current === null) {
+      prevWeekOffset.current = weekOffset;
+      return;
+    }
+    if (prevWeekOffset.current === weekOffset) return;
+    prevWeekOffset.current = weekOffset;
+    setWeekBarSeq((n) => n + 1);
+  }, [animReady, weekOffset]);
 
   /** Sunday summary gate (once per session) */
   useEffect(() => {
@@ -337,9 +373,16 @@ export function HomeView() {
       )}
       <div className="mb-6 flex items-start justify-between gap-3">
         <div>
-          <p className="btb-home-date text-xs text-muted">{format(now, "EEEE, MMMM d")}</p>
-          <p className="btb-home-time mt-1 font-mono text-lg font-medium text-gold">{format(now, "h:mm a")}</p>
-          <h1 className="btb-home-greeting mt-3 font-display text-3xl font-bold tracking-tight text-gold md:text-4xl">
+          <p className={cn("text-xs text-muted", animReady && "btb-home-date")}>{format(now, "EEEE, MMMM d")}</p>
+          <p className={cn("mt-1 font-mono text-lg font-medium text-gold", animReady && "btb-home-time")}>
+            {format(now, "h:mm a")}
+          </p>
+          <h1
+            className={cn(
+              "mt-3 font-display text-3xl font-bold tracking-tight text-gold md:text-4xl",
+              animReady && "btb-home-greeting"
+            )}
+          >
             {greetingLine}
           </h1>
         </div>
@@ -353,7 +396,7 @@ export function HomeView() {
       </div>
 
       {isFri && !fridayDismissed && (
-        <Card className="btb-home-friday mb-6 border-gold/40 bg-gold/5 p-4">
+        <Card className={cn("mb-6 border-gold/40 bg-gold/5 p-4", animReady && "btb-home-friday")}>
           <p className="font-medium text-ink">Time for your weekly weigh-in!</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Input
@@ -374,15 +417,15 @@ export function HomeView() {
         </Card>
       )}
 
-      <div className="btb-home-rings mb-10 grid grid-cols-2 gap-6">
+      <div className={cn("mb-10 grid grid-cols-2 gap-6", animReady && "btb-home-rings")}>
         <div className="flex flex-col items-center py-2">
           <RingProgress
             label="Calories"
             value={goalsReady ? totals.cal : 0}
             max={goalsReady ? calGoal! : 1}
             sublabel={goalsReady ? `${Math.round(totals.cal)} / ${calGoal}` : `${Math.round(totals.cal)} / —`}
-            animateIntro={goalsReady}
-            introKey={ringIntroKey}
+            animateIntro={goalsReady && animReady}
+            introKey={animReady ? ringIntroKey : 0}
             countMaxLabel={goalsReady ? String(calGoal) : "—"}
             countMode="kcal"
           />
@@ -393,15 +436,15 @@ export function HomeView() {
             value={goalsReady ? totals.prot : 0}
             max={goalsReady ? protGoal! : 1}
             sublabel={goalsReady ? `${Math.round(totals.prot)}g / ${protGoal}g` : `${Math.round(totals.prot)}g / —`}
-            animateIntro={goalsReady}
-            introKey={ringIntroKey}
+            animateIntro={goalsReady && animReady}
+            introKey={animReady ? ringIntroKey : 0}
             countMaxLabel={goalsReady ? String(protGoal) : "—"}
             countMode="g"
           />
         </div>
       </div>
 
-      <Card className="btb-home-sleep mb-10 p-5">
+      <Card className={cn("mb-10 p-5", animReady && "btb-home-sleep")}>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">Sleep last night</p>
@@ -409,7 +452,7 @@ export function HomeView() {
               {lastSleep?.duration_hours != null ? `${lastSleep.duration_hours} h` : "Log sleep"}
             </p>
             {lastSleep?.duration_hours == null && (
-              <Link href="/sleep#log" className="mt-3 inline-block text-sm font-medium text-gold hover:underline">
+              <Link href="/sleep" className="mt-3 inline-block text-sm font-medium text-gold hover:underline">
                 Open sleep
               </Link>
             )}
@@ -429,7 +472,7 @@ export function HomeView() {
         <h2 className="font-display text-lg font-semibold text-ink">This week</h2>
         <p className="text-xs text-muted">Swipe for past weeks · {weekOffset === 0 ? "Current" : `${weekOffset} wk ago`}</p>
       </div>
-      <Card className="btb-home-week mb-10 p-5">
+      <Card className={cn("mb-10 p-5", animReady && "btb-home-week")}>
         <div className="flex justify-between gap-2">
           {weekDays.map((d, i) => {
             const ds = format(d, "yyyy-MM-dd");
@@ -470,8 +513,8 @@ export function HomeView() {
                 </span>
                 <div className="mt-auto h-2 w-full overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
                   <div
-                    key={`${weekOffset}-${ds}-bar`}
-                    className={cn("btb-week-bar-fill h-full rounded-full", fillClass)}
+                    key={`${weekBarSeq}-${weekOffset}-${ds}-bar`}
+                    className={cn("h-full rounded-full", animReady && "btb-week-bar-fill", fillClass)}
                     style={
                       {
                         width: `${Math.min(100, combinedPct)}%`,

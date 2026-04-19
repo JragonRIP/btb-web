@@ -19,7 +19,9 @@ export function WeeklyPlanView() {
   const todayDbDow = new Date().getDay();
   const [selectedDow, setSelectedDow] = useState(todayDbDow);
   const [pillsMotion, setPillsMotion] = useState(false);
-  const pillIntroFired = useRef(false);
+  const [planDataReady, setPlanDataReady] = useState(false);
+  const [animReady, setAnimReady] = useState(false);
+  const pillMotionApplied = useRef(false);
   const pillRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const aliveRef = useRef(true);
 
@@ -35,7 +37,10 @@ export function WeeklyPlanView() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      if (aliveRef.current) setPlanDataReady(true);
+      return;
+    }
     const cached = readWeeklyPlanCache(user.id);
     if (cached?.v?.length) {
       setRows(cached.v);
@@ -57,6 +62,8 @@ export function WeeklyPlanView() {
       if (!aliveRef.current) return;
       if (!cached?.v?.length) setRows([]);
       setOffline(true);
+    } finally {
+      if (aliveRef.current) setPlanDataReady(true);
     }
   }, [supabase]);
 
@@ -65,11 +72,24 @@ export function WeeklyPlanView() {
   }, [load]);
 
   useEffect(() => {
-    if (!supabase || pillIntroFired.current) return;
-    pillIntroFired.current = true;
-    const id = requestAnimationFrame(() => setPillsMotion(true));
-    return () => cancelAnimationFrame(id);
-  }, [supabase]);
+    if (!planDataReady) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setAnimReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [planDataReady]);
+
+  useEffect(() => {
+    if (!animReady || pillMotionApplied.current) return;
+    pillMotionApplied.current = true;
+    setPillsMotion(true);
+  }, [animReady]);
 
   useLayoutEffect(() => {
     const el = pillRefs.current.get(selectedDow);
@@ -114,7 +134,7 @@ export function WeeklyPlanView() {
               style={{ ["--btb-pi" as string]: idx } as CSSProperties}
               className={cn(
                 "shrink-0 rounded-full px-4 py-2.5 text-sm font-semibold transition min-h-[44px]",
-                pillsMotion && "btb-workout-pill",
+                animReady && pillsMotion && "btb-workout-pill",
                 sel ? "bg-gold text-black shadow-gold" : "bg-elevated text-muted ring-1 ring-line/60"
               )}
             >
