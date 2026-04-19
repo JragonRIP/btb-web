@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -14,7 +14,7 @@ import { Card } from "@/components/ui/card";
 import { ExerciseInlineForm } from "@/components/workout/exercise-inline-form";
 import { formatExerciseMetaLine } from "@/lib/plan-exercise";
 import { cn } from "@/lib/utils";
-import { ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 
 const MON_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 const MUSCLE_PRESETS = ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core", "Full Body", "Other"] as const;
@@ -23,6 +23,12 @@ type Phase = "type" | "muscle" | "exercises" | "rest_ok" | "summary";
 
 function monIndexToDbDow(i: number): number {
   return MON_FIRST_DB_DOW[i] ?? 1;
+}
+
+/** Normalize DB weekday keys so Map lookups stay consistent (Postgres may return string or number). */
+function asDow(v: unknown): number {
+  const n = typeof v === "string" ? Number.parseInt(v, 10) : Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function emptyRow(userId: string, dow: number): WeeklyWorkoutPlanRow {
@@ -38,7 +44,7 @@ function emptyRow(userId: string, dow: number): WeeklyWorkoutPlanRow {
 async function upsertPlanDay(supabase: SupabaseClient, userId: string, row: WeeklyWorkoutPlanRow) {
   const payload = {
     user_id: userId,
-    day_of_week: row.day_of_week,
+    day_of_week: asDow(row.day_of_week),
     muscle_group: row.muscle_group ?? "",
     day_type: row.day_type,
     exercises: row.exercises.map((e) => normalizePlanExercise(e)),
@@ -58,6 +64,12 @@ export function WorkoutSetupFlowView() {
   const [showExerciseForm, setShowExerciseForm] = useState(false);
   const [editingExId, setEditingExId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [summaryOpenDow, setSummaryOpenDow] = useState<number | null>(null);
+
+  const rowsByDowRef = useRef(rowsByDow);
+  rowsByDowRef.current = rowsByDow;
+  const monIdxRef = useRef(monIdx);
+  monIdxRef.current = monIdx;
 
   const currentDow = monIndexToDbDow(monIdx);
   const currentRow = rowsByDow.get(currentDow) ?? (userId ? emptyRow(userId, currentDow) : null);
@@ -76,7 +88,8 @@ export function WorkoutSetupFlowView() {
     const { data } = await supabase.from("weekly_workout_plan").select("*").eq("user_id", user.id);
     const map = new Map<number, WeeklyWorkoutPlanRow>();
     for (const raw of (data ?? []) as WeeklyWorkoutPlanRow[]) {
-      map.set(raw.day_of_week, raw);
+      const dow = asDow(raw.day_of_week);
+      map.set(dow, { ...raw, day_of_week: dow });
     }
     for (let i = 0; i < 7; i++) {
       const dow = monIndexToDbDow(i);
@@ -117,7 +130,8 @@ export function WorkoutSetupFlowView() {
     }
     setRowsByDow((prev) => {
       const merged = new Map(prev);
-      merged.set(row.day_of_week, row);
+      const dowKey = asDow(row.day_of_week);
+      merged.set(dowKey, { ...row, day_of_week: dowKey });
       const arr = Array.from(merged.values()).sort((a, b) => a.day_of_week - b.day_of_week);
       writeWeeklyPlanCache(userId, arr);
       return merged;
@@ -136,19 +150,23 @@ export function WorkoutSetupFlowView() {
   }
 
   async function finishRestDay() {
-    if (!currentRow || !userId) return;
+    if (!userId) return;
+    const dow = monIndexToDbDow(monIdxRef.current);
+    const latest = rowsByDowRef.current.get(dow) ?? (userId ? emptyRow(userId, dow) : null);
+    if (!latest) return;
     setBusy(true);
     const row: WeeklyWorkoutPlanRow = {
-      ...currentRow,
+      ...latest,
       exercises: [],
-      muscle_group: currentRow.muscle_group ?? "",
+      muscle_group: latest.muscle_group ?? "",
     };
     const ok = await persistRow(row);
     setBusy(false);
     if (!ok) return;
-    if (monIdx >= 6) setPhase("summary");
+    const idx = monIdxRef.current;
+    if (idx >= 6) setPhase("summary");
     else {
-      setMonIdx((i) => i + 1);
+      setMonIdx(idx + 1);
       setPhase("type");
       setShowExerciseForm(false);
       setEditingExId(null);
@@ -156,23 +174,26 @@ export function WorkoutSetupFlowView() {
   }
 
   async function finishWorkoutDay() {
-    if (!currentRow || !userId) return;
-    if (currentRow.exercises.length === 0) {
+    if (!userId || !supabase) return;
+    const dow = monIndexToDbDow(monIdxRef.current);
+    const latest = rowsByDowRef.current.get(dow) ?? emptyRow(userId, dow);
+    if (latest.exercises.length === 0) {
       toast.error("Add at least one exercise, or pick a rest day.");
       return;
     }
     setBusy(true);
     const row: WeeklyWorkoutPlanRow = {
-      ...currentRow,
-      muscle_group: currentRow.muscle_group ?? "",
-      exercises: currentRow.exercises.map((e) => normalizePlanExercise(e)),
+      ...latest,
+      muscle_group: latest.muscle_group ?? "",
+      exercises: latest.exercises.map((e) => normalizePlanExercise(e)),
     };
     const ok = await persistRow(row);
     setBusy(false);
     if (!ok) return;
-    if (monIdx >= 6) setPhase("summary");
+    const idx = monIdxRef.current;
+    if (idx >= 6) setPhase("summary");
     else {
-      setMonIdx((i) => i + 1);
+      setMonIdx(idx + 1);
       setPhase("type");
       setShowExerciseForm(false);
       setEditingExId(null);
@@ -182,8 +203,8 @@ export function WorkoutSetupFlowView() {
   async function skipRemaining() {
     if (!supabase || !userId) return;
     setBusy(true);
-    const merged = new Map(rowsByDow);
-    for (let i = monIdx + 1; i < 7; i++) {
+    const merged = new Map(rowsByDowRef.current);
+    for (let i = monIdxRef.current + 1; i < 7; i++) {
       const dow = monIndexToDbDow(i);
       const base = merged.get(dow) ?? emptyRow(userId, dow);
       const row: WeeklyWorkoutPlanRow = {
@@ -265,10 +286,17 @@ export function WorkoutSetupFlowView() {
                   ? "Active rest"
                   : "Full rest";
             const exn = (row?.exercises ?? []).length;
+            const exList = ((row?.exercises ?? []) as PlanExercise[]).map((e) => normalizePlanExercise(e));
+            const open = summaryOpenDow === dow;
             return (
-              <Card key={dow} className="p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
+              <Card key={dow} className="overflow-hidden">
+                <button
+                  type="button"
+                  className="flex min-h-[48px] w-full items-start gap-3 p-4 text-left transition hover:bg-elevated/40"
+                  onClick={() => setSummaryOpenDow(open ? null : dow)}
+                >
+                  {open ? <ChevronDown className="mt-1 h-5 w-5 shrink-0 text-muted" /> : <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-muted" />}
+                  <div className="min-w-0 flex-1">
                     <p className="font-display text-lg font-semibold text-ink">{name}</p>
                     <p className="mt-1 text-sm text-muted">
                       {dt === "workout" ? (
@@ -281,7 +309,22 @@ export function WorkoutSetupFlowView() {
                     </p>
                   </div>
                   <span className="shrink-0 rounded-full bg-gold/15 px-3 py-1 text-xs font-semibold text-gold">{badge}</span>
-                </div>
+                </button>
+                {open && dt === "workout" && exList.length > 0 ? (
+                  <ul className="space-y-2 border-t border-line/80 px-4 py-3 text-sm">
+                    {exList.map((ex) => (
+                      <li key={ex.id} className="flex flex-col gap-0.5 rounded-lg bg-surface/60 px-3 py-2 dark:bg-elevated/50">
+                        <span className="font-medium text-ink">{ex.name}</span>
+                        <span className="text-muted">{formatExerciseMetaLine(ex)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {open && (dt !== "workout" || exList.length === 0) ? (
+                  <p className="border-t border-line/80 px-4 py-3 text-sm text-muted">
+                    {dt === "workout" ? "No exercises saved for this day." : "Recovery day — no exercises listed."}
+                  </p>
+                ) : null}
               </Card>
             );
           })}

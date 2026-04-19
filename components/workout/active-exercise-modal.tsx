@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PlanExercise } from "@/types";
 import { exerciseKind } from "@/lib/plan-exercise";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ export function ActiveExerciseModal({
   onClose: () => void;
   onExerciseComplete: (ex: PlanExercise) => void | Promise<void>;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [setIdx, setSetIdx] = useState(0);
   const setIdxRef = useRef(0);
   setIdxRef.current = setIdx;
@@ -55,6 +57,10 @@ export function ActiveExerciseModal({
 
   const exerciseRef = useRef<PlanExercise | null>(null);
   exerciseRef.current = exercise;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const clearTimers = () => {
     if (restTimerRef.current != null) {
@@ -94,6 +100,9 @@ export function ActiveExerciseModal({
     });
   }, [onExerciseComplete, onClose, reset]);
 
+  const finishExerciseRef = useRef(finishExercise);
+  finishExerciseRef.current = finishExercise;
+
   const afterRest = useCallback(() => {
     clearTimers();
     const ex = exerciseRef.current;
@@ -105,8 +114,8 @@ export function ActiveExerciseModal({
       setUi({ phase: "ready" });
       return;
     }
-    finishExercise();
-  }, [finishExercise]);
+    finishExerciseRef.current();
+  }, []);
 
   const afterRestRef = useRef(afterRest);
   afterRestRef.current = afterRest;
@@ -133,6 +142,17 @@ export function ActiveExerciseModal({
     }, 1000);
   }, []);
 
+  const beginRestRef = useRef(beginRest);
+  beginRestRef.current = beginRest;
+
+  function completeRepsSetOrFinish() {
+    const ex = exerciseRef.current;
+    if (!ex) return;
+    const total = Math.max(1, ex.sets);
+    if (setIdxRef.current >= total - 1) finishExerciseRef.current();
+    else beginRestRef.current();
+  }
+
   const countStep = ui.phase === "count" ? ui.v : null;
 
   // 3-2-1 countdown
@@ -149,9 +169,6 @@ export function ActiveExerciseModal({
     }, 1000);
     return () => window.clearTimeout(t);
   }, [open, exercise, ui.phase, countStep]);
-
-  const beginRestRef = useRef(beginRest);
-  beginRestRef.current = beginRest;
 
   // GO banner → active work
   useEffect(() => {
@@ -176,7 +193,9 @@ export function ActiveExerciseModal({
             timedTimerRef.current = null;
           }
           vibrateShort();
-          beginRestRef.current();
+          const total = Math.max(1, ex.sets);
+          if (setIdxRef.current >= total - 1) finishExerciseRef.current();
+          else beginRestRef.current();
           return;
         }
         setUi({ phase: "timed", left });
@@ -192,7 +211,13 @@ export function ActiveExerciseModal({
     return () => window.clearInterval(id);
   }, [ui.phase]);
 
+  function skipRest() {
+    clearTimers();
+    afterRestRef.current();
+  }
+
   if (!open || !exercise) return null;
+  if (!mounted || typeof document === "undefined") return null;
 
   const kind = exerciseKind(exercise);
   const totalSets = Math.max(1, exercise.sets);
@@ -206,14 +231,12 @@ export function ActiveExerciseModal({
     setUi({ phase: "count", v: 3 });
   }
 
-  function skipRest() {
-    clearTimers();
-    afterRest();
-  }
-
-  return (
-    <div className="fixed inset-0 z-[80] flex flex-col bg-black/92 text-ink backdrop-blur-md">
-      <div className="flex items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+8px)]">
+  const overlay = (
+    <div
+      className="pointer-events-auto fixed inset-0 z-[9999] flex h-[100dvh] max-h-[100dvh] w-full max-w-none flex-col overflow-hidden bg-black/95 text-ink backdrop-blur-md"
+      style={{ width: "100vw", left: 0, top: 0 }}
+    >
+      <div className="flex shrink-0 items-center justify-between px-3 pt-[max(env(safe-area-inset-top,0px),10px)]">
         <div className="min-w-[44px]" />
         <button
           type="button"
@@ -229,68 +252,66 @@ export function ActiveExerciseModal({
         </button>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center px-6 pb-24 text-center">
-        <p className="font-display text-3xl font-semibold text-white md:text-4xl">{exercise.name}</p>
-        <p className="mt-4 text-sm font-medium uppercase tracking-wide text-white/60">{setLabel}</p>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4 pb-[max(env(safe-area-inset-bottom,0px),12px)] pt-2 text-center">
+        <p className="line-clamp-2 max-w-[min(100%,20rem)] font-display text-2xl font-semibold leading-tight text-white sm:text-3xl md:text-4xl">
+          {exercise.name}
+        </p>
+        <p className="mt-2 shrink-0 text-xs font-medium uppercase tracking-wide text-white/60 sm:text-sm">{setLabel}</p>
 
-        {ui.phase === "ready" && (
-          <div className="mt-10 w-full max-w-sm space-y-8">
-            {kind === "reps" ? (
-              <p className="font-display text-5xl font-bold text-gold md:text-6xl">
-                {isFailure ? "FAILURE" : `${targetReps} REPS`}
-              </p>
-            ) : (
-              <p className={cn("font-mono text-6xl font-bold text-gold md:text-7xl tabular-nums")}>{formatClock(duration)}</p>
-            )}
-            <Button type="button" className="min-h-[52px] w-full text-lg" onClick={startCountdown}>
-              {kind === "reps" ? "Start Set" : "Start"}
-            </Button>
-          </div>
-        )}
+        <div className="mt-4 flex min-h-0 w-full max-w-sm flex-1 flex-col items-center justify-center gap-4 overflow-hidden py-2">
+          {ui.phase === "ready" && (
+            <div className="flex w-full flex-col items-center gap-5">
+              {kind === "reps" ? (
+                <p className="font-display text-4xl font-bold leading-none text-gold sm:text-5xl md:text-6xl">
+                  {isFailure ? "FAILURE" : `${targetReps} REPS`}
+                </p>
+              ) : (
+                <p className="font-mono text-5xl font-bold tabular-nums text-gold sm:text-6xl md:text-7xl">{formatClock(duration)}</p>
+              )}
+              <Button type="button" className="min-h-[52px] w-full max-w-sm shrink-0 text-lg" onClick={startCountdown}>
+                {kind === "reps" ? "Start Set" : "Start"}
+              </Button>
+            </div>
+          )}
 
-        {ui.phase === "count" && (
-          <div className="mt-16">
-            <p className="font-display text-8xl font-bold text-gold">{ui.v}</p>
-          </div>
-        )}
+          {ui.phase === "count" && (
+            <p className="font-display text-7xl font-bold leading-none text-gold sm:text-8xl">{ui.v}</p>
+          )}
 
-        {ui.phase === "go" && (
-          <div className="mt-16">
-            <p className="font-display text-7xl font-bold text-white">GO!</p>
-          </div>
-        )}
+          {ui.phase === "go" && <p className="font-display text-6xl font-bold text-white sm:text-7xl">GO!</p>}
 
-        {ui.phase === "reps" && (
-          <div className="mt-10 w-full max-w-sm space-y-8">
-            <p className="text-sm uppercase tracking-wide text-white/60">Set in progress</p>
-            <p className="font-mono text-5xl font-semibold text-white tabular-nums">{repsElapsed}s</p>
-            <Button type="button" className="min-h-[52px] w-full text-lg" onClick={() => beginRest()}>
-              Complete Set
-            </Button>
-          </div>
-        )}
+          {ui.phase === "reps" && (
+            <div className="flex w-full flex-col items-center gap-5">
+              <p className="text-xs uppercase tracking-wide text-white/60 sm:text-sm">Set in progress</p>
+              <p className="font-mono text-4xl font-semibold tabular-nums text-white sm:text-5xl">{repsElapsed}s</p>
+              <Button type="button" className="min-h-[52px] w-full max-w-sm shrink-0 text-lg" onClick={completeRepsSetOrFinish}>
+                Complete Set
+              </Button>
+            </div>
+          )}
 
-        {ui.phase === "timed" && (
-          <div className="mt-10 w-full max-w-sm space-y-8">
-            <p className={cn("font-mono text-7xl font-bold tabular-nums text-gold", "animate-pulse")}>{formatClock(ui.left)}</p>
-          </div>
-        )}
+          {ui.phase === "timed" && (
+            <p className={cn("font-mono text-5xl font-bold tabular-nums text-gold sm:text-7xl", "animate-pulse")}>{formatClock(ui.left)}</p>
+          )}
 
-        {ui.phase === "rest" && (
-          <div className="mt-10 w-full max-w-sm space-y-6">
-            <p className="text-sm uppercase tracking-wide text-white/60">Rest</p>
-            <p className="font-mono text-7xl font-bold tabular-nums text-gold">{formatClock(ui.left)}</p>
-            <Button
-              type="button"
-              variant="secondary"
-              className="min-h-[48px] w-full border-white/20 bg-white/10 text-white hover:bg-white/15"
-              onClick={() => skipRest()}
-            >
-              Skip rest
-            </Button>
-          </div>
-        )}
+          {ui.phase === "rest" && (
+            <div className="flex w-full flex-col items-center gap-4">
+              <p className="text-xs uppercase tracking-wide text-white/60 sm:text-sm">Rest</p>
+              <p className="font-mono text-5xl font-bold tabular-nums text-gold sm:text-7xl">{formatClock(ui.left)}</p>
+              <Button
+                type="button"
+                variant="secondary"
+                className="min-h-[48px] w-full max-w-sm shrink-0 border-white/20 bg-white/10 text-white hover:bg-white/15"
+                onClick={() => skipRest()}
+              >
+                Skip rest
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
+
+  return createPortal(overlay, document.body);
 }

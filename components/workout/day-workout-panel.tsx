@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ActiveExerciseModal } from "@/components/workout/active-exercise-modal";
-import { PositiveIntInput } from "@/components/workout/positive-int-input";
 
 type LayoutMode = "page" | "embedded";
 
@@ -31,22 +30,10 @@ export function DayWorkoutPanel({
   const router = useRouter();
   const [plan, setPlan] = useState<WeeklyWorkoutPlanRow | null>(null);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [restSec, setRestSec] = useState<Record<string, number>>({});
-  const [timer, setTimer] = useState<{ exId: string; left: number } | null>(null);
   const [celebrate, setCelebrate] = useState(false);
   const [modalEx, setModalEx] = useState<PlanExercise | null>(null);
 
   const exercises = useMemo(() => (plan?.exercises ?? []) as PlanExercise[], [plan]);
-
-  useEffect(() => {
-    if (!timer) return;
-    if (timer.left <= 0) {
-      setTimer(null);
-      return;
-    }
-    const id = setInterval(() => setTimer((t) => (t ? { ...t, left: t.left - 1 } : null)), 1000);
-    return () => clearInterval(id);
-  }, [timer]);
 
   const load = useCallback(async () => {
     if (!supabase) return;
@@ -63,13 +50,10 @@ export function DayWorkoutPanel({
     setPlan((row ?? null) as WeeklyWorkoutPlanRow | null);
     const raw = (row?.exercises ?? []) as PlanExercise[];
     const exs = raw.map((x, i) => (x.id ? normalizePlanExercise(x) : normalizePlanExercise({ ...x, id: `ex-${dow}-${i}` })));
-    const initRest: Record<string, number> = {};
     const initChk: Record<string, boolean> = {};
     for (const ex of exs) {
-      initRest[ex.id] = ex.restSeconds ?? 60;
       initChk[ex.id] = false;
     }
-    setRestSec(initRest);
     const { data: log } = await supabase
       .from("workout_logs")
       .select("exercises_done, completed")
@@ -208,7 +192,7 @@ export function DayWorkoutPanel({
       />
       <div className="relative mx-auto max-w-3xl space-y-4 px-4 py-6">
         {celebrate && (
-          <div className="pointer-events-none fixed inset-0 z-[95] flex items-center justify-center overflow-hidden bg-black/50 backdrop-blur-sm">
+          <div className="pointer-events-none fixed inset-0 z-[9998] flex items-center justify-center overflow-hidden bg-black/50 backdrop-blur-sm">
             {Array.from({ length: 22 }).map((_, i) => (
               <span
                 key={i}
@@ -258,52 +242,23 @@ export function DayWorkoutPanel({
                   >
                     {checked[ex.id] ? "✓" : ""}
                   </button>
-                  <div className="min-w-0 flex-1 space-y-3">
-                    <button
-                      type="button"
-                      className="w-full rounded-xl text-left transition hover:bg-elevated/50 dark:hover:bg-surface/40"
-                      disabled={checked[ex.id]}
-                      onClick={() => {
-                        if (checked[ex.id]) return;
-                        setModalEx(norm);
-                      }}
-                    >
-                      <p className="font-semibold text-ink">{ex.name}</p>
-                      <p className="text-sm text-muted">{formatExerciseMetaLine(norm)}</p>
-                      {!checked[ex.id] ? <p className="mt-1 text-xs font-medium text-gold">Tap to train</p> : null}
-                    </button>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <PositiveIntInput
-                        className="h-11 min-h-[44px] w-28"
-                        value={restSec[ex.id] ?? 60}
-                        min={1}
-                        onValueChange={(n) =>
-                          setRestSec((s) => ({
-                            ...s,
-                            [ex.id]: n,
-                          }))
-                        }
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="min-h-[44px]"
-                        onClick={() => setTimer({ exId: ex.id, left: restSec[ex.id] ?? 60 })}
-                      >
-                        Start rest timer
-                      </Button>
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 rounded-xl py-1 text-left transition hover:bg-elevated/50 dark:hover:bg-surface/40"
+                    disabled={checked[ex.id]}
+                    onClick={() => {
+                      if (checked[ex.id]) return;
+                      setModalEx(norm);
+                    }}
+                  >
+                    <p className="font-semibold text-ink">{ex.name}</p>
+                    <p className="text-sm text-muted">{formatExerciseMetaLine(norm)}</p>
+                    {!checked[ex.id] ? <p className="mt-1 text-xs font-medium text-gold">Tap to train</p> : null}
+                  </button>
                 </div>
               </Card>
             );
           })
-        )}
-        {timer && (
-          <div className="fixed bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-2xl border border-gold bg-surface px-8 py-6 shadow-gold dark:bg-elevated md:bottom-10">
-            <p className="text-center text-xs text-muted">Rest</p>
-            <p className="font-mono text-4xl font-bold text-gold">{timer.left}s</p>
-          </div>
         )}
         {exercises.length > 0 && (
           <Button type="button" className="min-h-[48px] w-full" disabled={!allChecked} onClick={() => void completeWorkout()}>
