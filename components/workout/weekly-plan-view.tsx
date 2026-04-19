@@ -130,7 +130,7 @@ export function WeeklyPlanView() {
       )}
       <header className="border-b border-line/80 bg-canvas/80 px-4 pb-4 pt-[calc(max(env(safe-area-inset-top,0px),16px)+8px)] backdrop-blur-md">
         <h1 className="font-display text-2xl font-semibold text-ink md:text-3xl">Workout</h1>
-        <p className="mt-1 text-sm text-muted">Pick a day, then train or recover. Use guided setup if you&apos;re new.</p>
+        <p className="mt-1 text-sm text-muted">Pick a day, then train or recover.</p>
       </header>
 
       <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 py-4">
