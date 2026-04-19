@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import { format, parseISO, startOfDay, subDays } from "date-fns";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { prefersReducedMotion } from "@/lib/motion";
 import {
   BTB_BOOT_SPINNER_MS,
   readProfileCache,
@@ -50,6 +51,13 @@ export function SleepView() {
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seededForm = useRef(false);
   const aliveRef = useRef(true);
+  const [sleepBarsKey, setSleepBarsKey] = useState(0);
+  const sleepBarsFired = useRef(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    setReducedMotion(prefersReducedMotion());
+  }, []);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -164,6 +172,14 @@ export function SleepView() {
   useEffect(() => {
     if (supabase) void refreshRemote();
   }, [refreshRemote, supabase]);
+
+  useEffect(() => {
+    if (sleepBarsFired.current) return;
+    if (blockingSpinner && rows.length === 0 && !profile) return;
+    sleepBarsFired.current = true;
+    const id = requestAnimationFrame(() => setSleepBarsKey(1));
+    return () => cancelAnimationFrame(id);
+  }, [blockingSpinner, rows.length, profile]);
 
   useEffect(() => {
     if (!rows.length || seededForm.current) return;
@@ -395,7 +411,7 @@ export function SleepView() {
       <section className="mt-0">
         <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted">Last 7 nights</h2>
         <div className="mt-6 flex gap-3">
-          {last7Days.map((d) => {
+          {last7Days.map((d, i) => {
             const ds = format(d, "yyyy-MM-dd");
             const log = logForDate(ds);
             const hours = log?.duration_hours != null ? Number(log.duration_hours) : null;
@@ -414,8 +430,17 @@ export function SleepView() {
               >
                 <div className="relative flex h-40 w-full max-w-[52px] flex-col justify-end overflow-hidden rounded-2xl bg-line/15 dark:bg-black/30">
                   <div
-                    className={cn("w-full rounded-t-2xl transition-all", fillClass)}
-                    style={{ height: logged ? `${Math.max(8, pct)}%` : "4px" }}
+                    className={cn(
+                      "w-full rounded-t-2xl",
+                      fillClass,
+                      logged && sleepBarsKey > 0 && !reducedMotion && "btb-sleep-bar-fill"
+                    )}
+                    style={
+                      {
+                        height: logged ? `${Math.max(8, pct)}%` : "4px",
+                        ["--btb-si" as string]: i,
+                      } as CSSProperties
+                    }
                   />
                 </div>
                 <span className={cn("text-[10px] font-semibold", isToday ? "text-gold" : "text-muted")}>{letter}</span>

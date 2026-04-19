@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { format } from "date-fns";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import type { DayType, WeeklyWorkoutPlanRow } from "@/types";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,8 @@ export function WeeklyPlanView() {
   const [offline, setOffline] = useState(false);
   const todayDbDow = new Date().getDay();
   const [selectedDow, setSelectedDow] = useState(todayDbDow);
+  const [pillsMotion, setPillsMotion] = useState(false);
+  const pillIntroFired = useRef(false);
   const pillRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const aliveRef = useRef(true);
 
@@ -62,6 +64,13 @@ export function WeeklyPlanView() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!supabase || pillIntroFired.current) return;
+    pillIntroFired.current = true;
+    const id = requestAnimationFrame(() => setPillsMotion(true));
+    return () => cancelAnimationFrame(id);
+  }, [supabase]);
+
   useLayoutEffect(() => {
     const el = pillRefs.current.get(selectedDow);
     el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
@@ -102,8 +111,10 @@ export function WeeklyPlanView() {
                 else pillRefs.current.delete(dow);
               }}
               onClick={() => setSelectedDow(dow)}
+              style={{ ["--btb-pi" as string]: idx } as CSSProperties}
               className={cn(
                 "shrink-0 rounded-full px-4 py-2.5 text-sm font-semibold transition min-h-[44px]",
+                pillsMotion && "btb-workout-pill",
                 sel ? "bg-gold text-black shadow-gold" : "bg-elevated text-muted ring-1 ring-line/60"
               )}
             >

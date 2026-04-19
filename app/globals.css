@@ -58,3 +58,214 @@
     display: none;
   }
 }
+
+/* Premium motion — disabled when user prefers reduced motion */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes btb-tab-enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .btb-tab-enter {
+    animation: btb-tab-enter 0.25s ease-out both;
+  }
+
+  @keyframes btb-fade-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes btb-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .btb-home-greeting {
+    animation: btb-fade-slide-up 0.4s ease-out both;
+  }
+  .btb-home-date {
+    animation: btb-fade-in 0.28s ease-out 0.04s both;
+  }
+  .btb-home-time {
+    animation: btb-fade-in 0.3s ease-out 0.08s both;
+  }
+  .btb-home-rings {
+    animation: btb-fade-in 0.45s ease-out 0.5s both;
+  }
+  .btb-home-sleep {
+    animation: btb-fade-in 0.45s ease-out 0.65s both;
+  }
+  .btb-home-week {
+    animation: btb-fade-in 0.45s ease-out 0.78s both;
+  }
+  .btb-home-friday {
+    animation: btb-fade-in 0.35s ease-out 0.42s both;
+  }
+
+  @keyframes btb-week-bar-x {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  .btb-week-bar-fill {
+    transform-origin: left center;
+    animation: btb-week-bar-x 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: calc(var(--btb-i, 0) * 50ms);
+  }
+
+  @keyframes btb-sleep-bar-y {
+    from {
+      transform: scaleY(0);
+    }
+    to {
+      transform: scaleY(1);
+    }
+  }
+  .btb-sleep-bar-fill {
+    transform-origin: bottom center;
+    animation: btb-sleep-bar-y 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: calc(var(--btb-si, 0) * 60ms);
+  }
+
+  @keyframes btb-log-bar-x {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  .btb-log-macro-fill {
+    transform-origin: left center;
+    animation: btb-log-bar-x 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @keyframes btb-pill-fade-in {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  .btb-workout-pill {
+    animation: btb-pill-fade-in 0.35s ease-out both;
+    animation-delay: calc(var(--btb-pi, 0) * 40ms);
+  }
+
+  @keyframes btb-log-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .btb-log-row-enter {
+    animation: btb-log-row-in 0.3s ease-out both;
+  }
+
+  @keyframes btb-log-row-out {
+    from {
+      opacity: 1;
+      max-height: 120px;
+    }
+    to {
+      opacity: 0;
+      max-height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin: 0;
+    }
+  }
+  .btb-log-row-exit {
+    animation: btb-log-row-out 0.25s ease-in forwards;
+    overflow: hidden;
+  }
+
+  @keyframes btb-ring-empty-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+  .btb-ring-empty-pulse {
+    animation: btb-ring-empty-pulse 2.2s ease-in-out infinite;
+  }
+
+  @keyframes btb-pr-pop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.04);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  .btb-pr-card-celebrate {
+    animation: btb-pr-pop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+    box-shadow: 0 0 0 2px rgb(var(--gold) / 0.55);
+  }
+
+  @keyframes btb-confetti-piece {
+    0% {
+      opacity: 1;
+      transform: translate(0, 0) rotate(0deg);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(var(--tx, 0), var(--ty, -80px)) rotate(var(--rot, 180deg));
+    }
+  }
+  .btb-confetti-piece {
+    animation: btb-confetti-piece 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btb-tab-enter,
+  .btb-home-greeting,
+  .btb-home-date,
+  .btb-home-time,
+  .btb-home-rings,
+  .btb-home-sleep,
+  .btb-home-week,
+  .btb-home-friday,
+  .btb-week-bar-fill,
+  .btb-sleep-bar-fill,
+  .btb-log-macro-fill,
+  .btb-workout-pill,
+  .btb-log-row-enter,
+  .btb-log-row-exit,
+  .btb-ring-empty-pulse,
+  .btb-pr-card-celebrate,
+  .btb-confetti-piece {
+    animation: none !important;
+  }
+}
+

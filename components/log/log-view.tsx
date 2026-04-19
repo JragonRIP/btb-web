@@ -12,6 +12,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { prefersReducedMotion } from "@/lib/motion";
 import {
   BTB_BOOT_SPINNER_MS,
   readFoodTodayCache,
@@ -19,6 +21,46 @@ import {
   writeFoodTodayCache,
   writeProfileCache,
 } from "@/lib/btb-local-cache";
+
+function FoodLogRow({
+  row,
+  exiting,
+  entering,
+  onDelete,
+  onExitEnd,
+  onEnterEnd,
+}: {
+  row: FoodLog;
+  exiting: boolean;
+  entering: boolean;
+  onDelete: () => void;
+  onExitEnd: () => void;
+  onEnterEnd: () => void;
+}) {
+  return (
+    <li
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-2 px-4 py-3",
+        entering && "btb-log-row-enter",
+        exiting && "btb-log-row-exit"
+      )}
+      onAnimationEnd={(e) => {
+        if (entering && e.animationName === "btb-log-row-in") onEnterEnd();
+        if (exiting && e.animationName === "btb-log-row-out") onExitEnd();
+      }}
+    >
+      <div>
+        <p className="font-medium text-ink">{row.name}</p>
+        <p className="text-xs text-muted">
+          {row.calories} kcal · {row.protein_g}g protein · {format(new Date(row.logged_at), "h:mm a")}
+        </p>
+      </div>
+      <Button type="button" variant="ghost" className="min-h-[44px] text-red-600" onClick={onDelete} disabled={exiting}>
+        Delete
+      </Button>
+    </li>
+  );
+}
 
 export function LogView() {
   const { client: supabase, error: envError } = useSupabaseBrowser();
@@ -32,6 +74,17 @@ export function LogView() {
   const [saving, setSaving] = useState(false);
   const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(true);
+  const [macroIntro, setMacroIntro] = useState(true);
+  const macroIntroPlayed = useRef(false);
+  const [enterIds, setEnterIds] = useState<Record<string, boolean>>({});
+  const [exitingId, setExitingId] = useState<string | null>(null);
+  const listAnimReady = useRef(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const rowsBeforeExitRef = useRef<FoodLog[] | null>(null);
+
+  useEffect(() => {
+    setReducedMotion(prefersReducedMotion());
+  }, []);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -43,6 +96,21 @@ export function LogView() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (blockingSpinner || !profile || macroIntroPlayed.current) return;
+    macroIntroPlayed.current = true;
+    const t = setTimeout(() => setMacroIntro(false), 900);
+    return () => clearTimeout(t);
+  }, [blockingSpinner, profile]);
+
+  useEffect(() => {
+    if (blockingSpinner || !profile) return;
+    const t = setTimeout(() => {
+      listAnimReady.current = true;
+    }, 500);
+    return () => clearTimeout(t);
+  }, [blockingSpinner, profile]);
 
   const today = format(new Date(), "yyyy-MM-dd");
 
@@ -118,6 +186,9 @@ export function LogView() {
   const protGoal = profile?.protein_goal_g;
   const goalsReady = profile != null && calGoal != null && protGoal != null;
 
+  const calPct = goalsReady && calGoal ? Math.min(100, (totals.c / calGoal) * 100) : 0;
+  const protPct = goalsReady && protGoal ? Math.min(100, (totals.p / protGoal) * 100) : 0;
+
   async function addEntry(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) return;
@@ -142,6 +213,10 @@ export function LogView() {
       protein_g: protein,
       logged_at: new Date().toISOString(),
     };
+
+    if (listAnimReady.current && !reducedMotion) {
+      setEnterIds((m) => ({ ...m, [tempId]: true }));
+    }
 
     setRows((prev) => {
       const next = [optimistic, ...prev];
@@ -172,6 +247,11 @@ export function LogView() {
         writeFoodTodayCache(user.id, today, next);
         return next;
       });
+      setEnterIds((m) => {
+        const n = { ...m };
+        delete n[tempId];
+        return n;
+      });
     } else if (inserted) {
       const row = inserted as FoodLog;
       setRows((prev) => {
@@ -179,25 +259,31 @@ export function LogView() {
         writeFoodTodayCache(user.id, today, next);
         return next;
       });
+      setEnterIds((m) => {
+        const n = { ...m };
+        if (n[tempId]) {
+          delete n[tempId];
+          n[row.id] = true;
+        }
+        return n;
+      });
       toast.success("Logged");
       void recomputeStreaks(supabase, user.id);
     }
     setSaving(false);
   }
 
-  async function remove(id: string) {
+  async function finalizeRemove(id: string) {
     if (!supabase) return;
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
-    const prev = rows;
-    setRows((r) => r.filter((x) => x.id !== id));
-    writeFoodTodayCache(
-      user.id,
-      today,
-      prev.filter((x) => x.id !== id)
-    );
+    const prev = rowsBeforeExitRef.current ?? rows;
+    rowsBeforeExitRef.current = null;
+    const next = prev.filter((x) => x.id !== id);
+    setRows(next);
+    writeFoodTodayCache(user.id, today, next);
     const { error } = await supabase.from("food_logs").delete().eq("id", id);
     if (error) {
       toast.error(error.message);
@@ -206,6 +292,16 @@ export function LogView() {
     } else {
       toast.success("Removed");
       void recomputeStreaks(supabase, user.id);
+    }
+    setExitingId(null);
+  }
+
+  function requestRemove(id: string) {
+    if (exitingId) return;
+    rowsBeforeExitRef.current = rows;
+    setExitingId(id);
+    if (reducedMotion) {
+      window.setTimeout(() => void finalizeRemove(id), 0);
     }
   }
 
@@ -255,12 +351,14 @@ export function LogView() {
                 {Math.round(totals.c)} / {goalsReady ? calGoal : "—"} kcal
               </span>
             </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
+            <div className="relative h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
               <div
-                className="h-full rounded-full bg-gold transition-[width] duration-300 ease-out"
-                style={{
-                  width: goalsReady && calGoal ? `${Math.min(100, (totals.c / calGoal) * 100)}%` : "0%",
-                }}
+                className={cn(
+                  "absolute inset-y-0 left-0 h-full rounded-full bg-gold",
+                  macroIntro && !reducedMotion && "btb-log-macro-fill",
+                  (!macroIntro || reducedMotion) && "motion-reduce:transition-none transition-[width] duration-500 ease-out"
+                )}
+                style={{ width: `${calPct}%` }}
               />
             </div>
           </div>
@@ -271,12 +369,14 @@ export function LogView() {
                 {Math.round(totals.p)}g / {goalsReady ? `${protGoal}g` : "—"} protein
               </span>
             </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
+            <div className="relative h-2.5 overflow-hidden rounded-full bg-line/15 dark:bg-white/[0.08]">
               <div
-                className="h-full rounded-full bg-gold transition-[width] duration-300 ease-out"
-                style={{
-                  width: goalsReady && protGoal ? `${Math.min(100, (totals.p / protGoal) * 100)}%` : "0%",
-                }}
+                className={cn(
+                  "absolute inset-y-0 left-0 h-full rounded-full bg-gold",
+                  macroIntro && !reducedMotion && "btb-log-macro-fill",
+                  (!macroIntro || reducedMotion) && "motion-reduce:transition-none transition-[width] duration-500 ease-out"
+                )}
+                style={{ width: `${protPct}%` }}
               />
             </div>
           </div>
@@ -314,17 +414,21 @@ export function LogView() {
               <li className="px-4 py-10 text-center text-sm text-muted">No entries yet.</li>
             )}
             {rows.map((r) => (
-              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-                <div>
-                  <p className="font-medium text-ink">{r.name}</p>
-                  <p className="text-xs text-muted">
-                    {r.calories} kcal · {r.protein_g}g protein · {format(new Date(r.logged_at), "h:mm a")}
-                  </p>
-                </div>
-                <Button type="button" variant="ghost" className="min-h-[44px] text-red-600" onClick={() => void remove(r.id)}>
-                  Delete
-                </Button>
-              </li>
+              <FoodLogRow
+                key={r.id}
+                row={r}
+                exiting={exitingId === r.id}
+                entering={Boolean(enterIds[r.id])}
+                onDelete={() => requestRemove(r.id)}
+                onExitEnd={() => void finalizeRemove(r.id)}
+                onEnterEnd={() =>
+                  setEnterIds((m) => {
+                    const n = { ...m };
+                    delete n[r.id];
+                    return n;
+                  })
+                }
+              />
             ))}
           </ul>
         </Card>

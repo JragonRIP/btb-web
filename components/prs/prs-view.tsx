@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
@@ -31,6 +31,8 @@ export function PrsView() {
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [celebrate, setCelebrate] = useState<string | null>(null);
+  const [confettiOn, setConfettiOn] = useState(false);
+  const [cardCelebrate, setCardCelebrate] = useState(false);
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -94,8 +96,14 @@ export function PrsView() {
     });
     if (error) toast.error(error.message);
     else {
-      if (newScore > best) setCelebrate(exercise.trim());
-      setTimeout(() => setCelebrate(null), 4000);
+      if (newScore > best) {
+        setCelebrate(exercise.trim());
+        setConfettiOn(true);
+        setCardCelebrate(true);
+        window.setTimeout(() => setConfettiOn(false), 1500);
+        window.setTimeout(() => setCardCelebrate(false), 650);
+        window.setTimeout(() => setCelebrate(null), 2200);
+      }
       toast.success("PR logged");
       setExercise("");
       setWeight("");
@@ -121,20 +129,41 @@ export function PrsView() {
   if (!supabase) return null;
 
   return (
-    <div>
+    <div className="relative">
+      {confettiOn && (
+        <div className="pointer-events-none fixed inset-0 z-[60] overflow-hidden" aria-hidden>
+          {Array.from({ length: 22 }).map((_, i) => {
+            const spread = (i - 11) * 7;
+            const tx = `${Math.sin(i * 0.55) * 110 + spread}px`;
+            const ty = `${-70 - (i % 6) * 18 - Math.abs(spread) * 0.35}px`;
+            const rot = `${i * 31 + 180}deg`;
+            return (
+              <span
+                key={i}
+                className="btb-confetti-piece absolute left-1/2 top-[32%] h-2.5 w-2 -translate-x-1/2 rounded-sm shadow-sm"
+                style={
+                  {
+                    background: "linear-gradient(135deg, rgb(253 224 71), rgb(180 83 9))",
+                    ["--tx" as string]: tx,
+                    ["--ty" as string]: ty,
+                    ["--rot" as string]: rot,
+                    animationDelay: `${i * 16}ms`,
+                  } as CSSProperties
+                }
+              />
+            );
+          })}
+        </div>
+      )}
       <PageHeader title="PRs" subtitle="Personal records & weight trajectory." />
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6">
         {celebrate && (
-          <div
-            className={cn(
-              "rounded-2xl border border-gold bg-gold/10 px-4 py-4 text-center font-display text-lg font-bold text-gold animate-pulse"
-            )}
-          >
-            New PR! 🎉 {celebrate}
+          <div className="rounded-2xl border border-gold/45 bg-gold/10 px-4 py-3 text-center font-display text-base font-bold text-gold">
+            New PR · {celebrate}
           </div>
         )}
 
-        <Card className="p-4">
+        <Card className={cn("p-4", cardCelebrate && "btb-pr-card-celebrate")}>
           <h2 className="font-display text-lg font-semibold text-ink">Log a PR</h2>
           <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={addPr}>
             <div className="sm:col-span-2">
