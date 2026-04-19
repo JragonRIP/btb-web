@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import { useSupabaseBrowser } from "@/hooks/use-supabase-browser";
 import type { DayType, PlanExercise, WeeklyWorkoutPlanRow } from "@/types";
 import { MON_FIRST_DB_DOW } from "@/lib/week-dates";
 import { normalizePlanExercise } from "@/lib/plan-exercise";
-import { writeWeeklyPlanCache } from "@/lib/btb-local-cache";
+import { readActiveUserId, readWeeklyPlanCache, touchActiveUserId, writeWeeklyPlanCache } from "@/lib/btb-local-cache";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ExerciseInlineForm } from "@/components/workout/exercise-inline-form";
@@ -50,6 +50,48 @@ function isDayConfiguredInDb(row: WeeklyWorkoutPlanRow | undefined): boolean {
   return Array.isArray(row.exercises) && row.exercises.length > 0;
 }
 
+function seedEmptyWeek(uid: string): Map<number, WeeklyWorkoutPlanRow> {
+  const m = new Map<number, WeeklyWorkoutPlanRow>();
+  for (let i = 0; i < 7; i++) {
+    const dow = monIndexToDbDow(i);
+    m.set(dow, emptyRow(uid, dow));
+  }
+  return m;
+}
+
+function mapFromServerRows(userId: string, rows: WeeklyWorkoutPlanRow[]): {
+  map: Map<number, WeeklyWorkoutPlanRow>;
+  dbOnly: Map<number, WeeklyWorkoutPlanRow>;
+} {
+  const map = new Map<number, WeeklyWorkoutPlanRow>();
+  const dbOnly = new Map<number, WeeklyWorkoutPlanRow>();
+  for (const raw of rows) {
+    const dow = asDow(raw.day_of_week);
+    const normalized = { ...raw, day_of_week: dow };
+    map.set(dow, normalized);
+    dbOnly.set(dow, normalized);
+  }
+  for (let i = 0; i < 7; i++) {
+    const dow = monIndexToDbDow(i);
+    if (!map.has(dow)) map.set(dow, emptyRow(userId, dow));
+  }
+  return { map, dbOnly };
+}
+
+function scheduleWeeklyPlanCacheWrite(uid: string, rows: WeeklyWorkoutPlanRow[]) {
+  if (typeof window === "undefined") return;
+  window.setTimeout(() => {
+    writeWeeklyPlanCache(uid, rows);
+  }, 0);
+}
+
+const DBG_SETUP = process.env.NODE_ENV === "development";
+
+function dbgSetup(msg: string) {
+  if (!DBG_SETUP || typeof performance === "undefined") return;
+  console.log(`[btb-setup-flow] ${performance.now().toFixed(1)}ms ${msg}`);
+}
+
 async function upsertPlanDay(supabase: SupabaseClient, userId: string, row: WeeklyWorkoutPlanRow) {
   const payload = {
     user_id: userId,
@@ -62,12 +104,25 @@ async function upsertPlanDay(supabase: SupabaseClient, userId: string, row: Week
   return error;
 }
 
+function initialPlanState(): { userId: string | null; rows: Map<number, WeeklyWorkoutPlanRow> } {
+  if (typeof window === "undefined") return { userId: null, rows: new Map() };
+  const uid = readActiveUserId();
+  if (!uid) return { userId: null, rows: new Map() };
+  const cached = readWeeklyPlanCache(uid);
+  if (cached?.v?.length) {
+    const { map } = mapFromServerRows(uid, cached.v as WeeklyWorkoutPlanRow[]);
+    return { userId: uid, rows: map };
+  }
+  return { userId: uid, rows: seedEmptyWeek(uid) };
+}
+
 export function WorkoutSetupFlowView() {
-  const { client: supabase } = useSupabaseBrowser();
+  const { client: supabase, error: envError } = useSupabaseBrowser();
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const [bootReady, setBootReady] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const [rowsByDow, setRowsByDow] = useState<Map<number, WeeklyWorkoutPlanRow>>(new Map());
+  const [rowsByDow, setRowsByDow] = useState<Map<number, WeeklyWorkoutPlanRow>>(() => new Map());
   const [monIdx, setMonIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("type");
   const [showExerciseForm, setShowExerciseForm] = useState(false);
@@ -80,42 +135,74 @@ export function WorkoutSetupFlowView() {
   monIdxRef.current = monIdx;
   /** Last known server rows for this user (updated on load and after each successful persist). */
   const dbRowsByDowRef = useRef<Map<number, WeeklyWorkoutPlanRow>>(new Map());
+  const mountGen = useRef(0);
+
+  /** Sync: read active uid + weekly plan cache before paint — no network. */
+  useLayoutEffect(() => {
+    const dbgMount = DBG_SETUP ? ++mountGen.current : 0;
+    if (DBG_SETUP) {
+      console.log(`[btb-setup-flow] mount #${dbgMount}`);
+    }
+
+    const init = initialPlanState();
+    setUserId(init.userId);
+    setRowsByDow(init.rows);
+    const uid = init.userId;
+    if (uid) {
+      const cached = readWeeklyPlanCache(uid)?.v as WeeklyWorkoutPlanRow[] | undefined;
+      if (cached?.length) {
+        dbRowsByDowRef.current = mapFromServerRows(uid, cached).dbOnly;
+      } else {
+        dbRowsByDowRef.current = new Map();
+      }
+    } else {
+      dbRowsByDowRef.current = new Map();
+    }
+    setBootReady(true);
+
+    return () => {
+      if (DBG_SETUP) {
+        console.log(`[btb-setup-flow] unmount #${dbgMount}`);
+      }
+    };
+  }, []);
 
   const currentDow = monIndexToDbDow(monIdx);
   const currentRow = rowsByDow.get(currentDow) ?? (userId ? emptyRow(userId, currentDow) : null);
 
-  const load = useCallback(async () => {
-    if (!supabase) return;
-    setLoading(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-    setUserId(user.id);
-    const { data } = await supabase.from("weekly_workout_plan").select("*").eq("user_id", user.id);
-    const map = new Map<number, WeeklyWorkoutPlanRow>();
-    const dbOnly = new Map<number, WeeklyWorkoutPlanRow>();
-    for (const raw of (data ?? []) as WeeklyWorkoutPlanRow[]) {
-      const dow = asDow(raw.day_of_week);
-      const normalized = { ...raw, day_of_week: dow };
-      map.set(dow, normalized);
-      dbOnly.set(dow, normalized);
-    }
-    dbRowsByDowRef.current = dbOnly;
-    for (let i = 0; i < 7; i++) {
-      const dow = monIndexToDbDow(i);
-      if (!map.has(dow)) map.set(dow, emptyRow(user.id, dow));
-    }
-    setRowsByDow(map);
-    setLoading(false);
-  }, [supabase]);
-
+  /** Auth + weekly plan fetch: background only; UI can render from cache first. */
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!supabase) return;
+    let cancelled = false;
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (cancelled) return;
+      if (!user) {
+        setUserId(null);
+        setRowsByDow(new Map());
+        setAuthChecked(true);
+        return;
+      }
+      touchActiveUserId(user.id);
+      setUserId(user.id);
+
+      const { data } = await supabase.from("weekly_workout_plan").select("*").eq("user_id", user.id);
+      if (cancelled) return;
+      const { map, dbOnly } = mapFromServerRows(user.id, (data ?? []) as WeeklyWorkoutPlanRow[]);
+      dbRowsByDowRef.current = dbOnly;
+      setRowsByDow(map);
+      scheduleWeeklyPlanCacheWrite(
+        user.id,
+        Array.from(map.values()).sort((a, b) => a.day_of_week - b.day_of_week)
+      );
+      setAuthChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   const weekList = useMemo(() => {
     return MON_FULL.map((name, i) => {
@@ -139,10 +226,14 @@ export function WorkoutSetupFlowView() {
     setRowsByDow((prev) => {
       const merged = new Map(prev);
       const dowKey = asDow(row.day_of_week);
-      const nextRow = { ...row, day_of_week: dowKey };
-      merged.set(dowKey, nextRow);
-      writeWeeklyPlanCache(uid, Array.from(merged.values()).sort((a, b) => a.day_of_week - b.day_of_week));
+      merged.set(dowKey, { ...row, day_of_week: dowKey });
       return merged;
+    });
+    queueMicrotask(() => {
+      scheduleWeeklyPlanCacheWrite(
+        uid,
+        Array.from(rowsByDowRef.current.values()).sort((a, b) => a.day_of_week - b.day_of_week)
+      );
     });
   }
 
@@ -157,16 +248,21 @@ export function WorkoutSetupFlowView() {
   }
 
   async function savePlanRowInBackground(row: WeeklyWorkoutPlanRow) {
-    if (!supabase || !userId) return;
+    dbgSetup("savePlanRowInBackground: enter");
+    if (!supabase || !userId) {
+      dbgSetup("savePlanRowInBackground: skip (no client or user)");
+      return;
+    }
     let err = await upsertPlanDay(supabase, userId, row);
     if (err) err = await upsertPlanDay(supabase, userId, row);
     if (err) {
+      dbgSetup("savePlanRowInBackground: upsert failed");
       toast.error("Couldn’t sync this day — check your connection.");
       return;
     }
     const dk = asDow(row.day_of_week);
     dbRowsByDowRef.current.set(dk, { ...row, day_of_week: dk });
-    router.refresh();
+    dbgSetup("savePlanRowInBackground: done (success)");
   }
 
   function skipThisDay() {
@@ -179,11 +275,14 @@ export function WorkoutSetupFlowView() {
         const next = new Map(prev);
         if (dbRow) next.set(dow, { ...dbRow });
         else next.set(dow, emptyRow(userId, dow));
-        writeWeeklyPlanCache(userId, Array.from(next.values()).sort((a, b) => a.day_of_week - b.day_of_week));
         return next;
       });
       advanceAfterDay(idx);
     });
+    scheduleWeeklyPlanCacheWrite(
+      userId,
+      Array.from(rowsByDowRef.current.values()).sort((a, b) => a.day_of_week - b.day_of_week)
+    );
   }
 
   function selectDayType(t: DayType) {
@@ -197,7 +296,8 @@ export function WorkoutSetupFlowView() {
   }
 
   function finishRestDay() {
-    if (!userId || !supabase) return;
+    dbgSetup("finishRestDay: handler start");
+    if (!userId) return;
     const idx = monIdxRef.current;
     const dow = monIndexToDbDow(idx);
     const latest = rowsByDowRef.current.get(dow) ?? emptyRow(userId, dow);
@@ -206,15 +306,22 @@ export function WorkoutSetupFlowView() {
       exercises: [],
       muscle_group: latest.muscle_group ?? "",
     };
+    dbgSetup("finishRestDay: before flushSync");
     flushSync(() => {
       mergePlanRowIntoLocal(userId, row);
       advanceAfterDay(idx);
     });
-    void savePlanRowInBackground(row);
+    dbgSetup("finishRestDay: after flushSync");
+    dbgSetup("finishRestDay: before savePlanRowInBackground");
+    void savePlanRowInBackground(row).then(() => dbgSetup("finishRestDay: after savePlanRowInBackground"));
   }
 
   function finishWorkoutDay() {
-    if (!userId || !supabase) return;
+    dbgSetup("finishWorkoutDay: handler start");
+    if (!userId) {
+      dbgSetup("finishWorkoutDay: bail (no userId)");
+      return;
+    }
     const idx = monIdxRef.current;
     const dow = monIndexToDbDow(idx);
     const latest = rowsByDowRef.current.get(dow) ?? emptyRow(userId, dow);
@@ -227,11 +334,14 @@ export function WorkoutSetupFlowView() {
       muscle_group: latest.muscle_group ?? "",
       exercises: latest.exercises.map((e) => normalizePlanExercise(e)),
     };
+    dbgSetup("finishWorkoutDay: before flushSync");
     flushSync(() => {
       mergePlanRowIntoLocal(userId, row);
       advanceAfterDay(idx);
     });
-    void savePlanRowInBackground(row);
+    dbgSetup("finishWorkoutDay: after flushSync");
+    dbgSetup("finishWorkoutDay: before savePlanRowInBackground");
+    void savePlanRowInBackground(row).then(() => dbgSetup("finishWorkoutDay: after savePlanRowInBackground"));
   }
 
   function skipRemaining() {
@@ -259,9 +369,12 @@ export function WorkoutSetupFlowView() {
 
     flushSync(() => {
       setRowsByDow(merged);
-      writeWeeklyPlanCache(userId, Array.from(merged.values()).sort((a, b) => a.day_of_week - b.day_of_week));
       setPhase("summary");
     });
+    scheduleWeeklyPlanCacheWrite(
+      userId,
+      Array.from(rowsByDowRef.current.values()).sort((a, b) => a.day_of_week - b.day_of_week)
+    );
 
     void (async () => {
       for (const row of rowsToSave) {
@@ -274,7 +387,6 @@ export function WorkoutSetupFlowView() {
         const dk = asDow(row.day_of_week);
         dbRowsByDowRef.current.set(dk, { ...row, day_of_week: dk });
       }
-      router.refresh();
     })();
   }
 
@@ -313,7 +425,26 @@ export function WorkoutSetupFlowView() {
   const exercises = (currentRow?.exercises ?? []) as PlanExercise[];
   const addingOpen = showExerciseForm && !editingExId;
 
-  if (!supabase || loading || !userId || !currentRow) {
+  if (envError) {
+    return <p className="flex min-h-[60vh] items-center justify-center p-6 text-sm text-red-600">{envError}</p>;
+  }
+  if (!supabase || !bootReady) {
+    return <div className="flex min-h-[60vh] items-center justify-center text-muted">Loading…</div>;
+  }
+  if (!userId) {
+    if (!authChecked) {
+      return <div className="flex min-h-[60vh] items-center justify-center text-muted">Loading…</div>;
+    }
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 px-4 text-center text-muted">
+        <p className="text-sm">Sign in to set up your week.</p>
+        <Button type="button" variant="secondary" className="min-h-[48px]" onClick={() => router.push("/workout")}>
+          Back to workout
+        </Button>
+      </div>
+    );
+  }
+  if (!currentRow) {
     return <div className="flex min-h-[60vh] items-center justify-center text-muted">Loading…</div>;
   }
 
